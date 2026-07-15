@@ -1,0 +1,45 @@
+[
+    {
+        "fileHash": "sha256-629ff62fc01899f222c2abc41d8aeb798f08bfef4d0a2de4e833b0219e76e782",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/khad1r/cloudstream-ext",
+        "fileSize": 24621,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "khad1r"
+        ],
+        "tvTypes": [
+            "AnimeMovie",
+            "Anime",
+            "OVA"
+        ],
+        "version": 1,
+        "internalName": "Anoboy",
+        "description": "Anoboy - Streaming Anime Sub Indo",
+        "url": "https://raw.githubusercontent.com/khad1r/cloudstream-ext/builds/Anoboy.cs3",
+        "name": "Anoboy"
+    },
+    {
+        "fileHash": "sha256-6763e1669c047d10f0bf79d936fa0f5b5e792bb7cc8fdab7fc7ab15ef6b0c9e9",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/khad1r/cloudstream-ext",
+        "fileSize": 49561,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "khad1r"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Anime",
+            "AsianDrama"
+        ],
+        "version": 1,
+        "internalName": "Moviebox",
+        "description": "Movibox - Movie subtitle indonesia",
+        "url": "https://raw.githubusercontent.com/khad1r/cloudstream-ext/builds/Moviebox.cs3",
+        "name": "Moviebox"
+    }
+]
