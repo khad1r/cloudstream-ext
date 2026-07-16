@@ -1,7 +1,7 @@
 name: Build
 
 # https://docs.github.com/en/actions/learn-github-actions/workflow-syntax-for-github-actions#concurrency
-concurrency: 
+concurrency:
   group: "build"
   cancel-in-progress: true
 
@@ -13,7 +13,7 @@ on:
       - master
       - main
     paths-ignore:
-      - '*.md'
+      - "*.md"
 
 jobs:
   build:
@@ -31,7 +31,7 @@ jobs:
         with:
           ref: "builds"
           path: "builds"
-      
+
       - name: Clean old builds
         run: |
           rm $GITHUB_WORKSPACE/builds/*.cs3 || true
@@ -48,6 +48,15 @@ jobs:
       - name: Build Plugins
         run: |
           cd $GITHUB_WORKSPACE/src
+          node Anoboy/update-constants.js
+          
+          # Commit and push source updates back to repo
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Actions"
+          git add Anoboy/src/main/kotlin/com/Anoboy/Anoboy.kt Anoboy/src/main/kotlin/com/Anoboy/Extractor.kt
+          git commit -m "Auto-update Anoboy domain and Gofile salt [skip ci]" || echo "No source changes to commit"
+          git push origin HEAD:${{ github.ref_name }} || echo "No source changes to push"
+
           chmod +x gradlew
           ./gradlew make makePluginsJson
           ./gradlew ensureJarCompatibility
