@@ -1,11 +1,11 @@
 package com.anoboy
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
-import com.lagradost.cloudstream3.plugins.Plugin
+import com.lagradost.cloudstream3.plugins.BasePlugin
 import android.content.Context
 
 @CloudstreamPlugin
-class AnoboyPlugin: Plugin() {
+class AnoboyPlugin: BasePlugin() {
     override fun load(context: Context) {
         registerMainAPI(Anoboy())
 		registerExtractorAPI(Gofile())
