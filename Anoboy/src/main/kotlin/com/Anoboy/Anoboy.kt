@@ -35,7 +35,7 @@ class Anoboy : MainAPI() {
         "anime/ongoing/page/%d/" to "Ongoing Anime",
         "anime-movie/page/%d/" to "Movie",
         "live-action-movie/page/%d/" to "Live-Action",
-        "tokusatsu/page/%d/" to "Live-Action",
+        "tokusatsu/page/%d/" to "Tokusatsu",
         "action/page/%d/" to "Action",
         "adventure/page/%d/" to "Adventure",
         "romance/page/%d/" to "Romance",
