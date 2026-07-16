@@ -133,24 +133,18 @@ class Anoboy : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        val document = app.get(data).document
-		val url = document.selectFirst("#colomb span.ud a.udl")?.attr("href")
-			?: document.selectFirst("#colomb a.udl")?.attr("href")
-			?: return false
-		loadExtractor(url, mainUrl, subtitleCallback, callback)
-		return true
-        // 1. Load player iframe / mirrors
-        // val players = document.select("div.vmiror a").mapNotNull { it.attr("data-video") }.map { fixUrl(it) }
-        // for (player in players) {
-        //     loadExtractor(player, mainUrl, subtitleCallback, callback)
-        // }
-
-        // // 2. Load download mirrors
-        // val downloadUrls = document.select("#colomb a.udl").mapNotNull { it.attr("href") }.distinct()
-        // for (url in downloadUrls) {
-        //     loadExtractor(url, mainUrl, subtitleCallback, callback)
+        // 1. Load Gofile links
+        val gofileUrls = document.select("a[href*='gofile.io']").mapNotNull { it.attr("href") }.distinct()
+        for (url in gofileUrls) {
+            loadExtractor(url, mainUrl, subtitleCallback, callback)
         }
 
-        return true
+        // 2. Load player iframe / mirrors (Btube, etc.)
+        val players = document.select("div.vmiror a").mapNotNull { it.attr("data-video") }.map { fixUrl(it) }
+        for (player in players) {
+            loadExtractor(player, mainUrl, subtitleCallback, callback)
+        }
+
+        return gofileUrls.isNotEmpty() || players.isNotEmpty()
     }
 }
