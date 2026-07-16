@@ -109,8 +109,10 @@ class Anoboy : MainAPI() {
 		callback: (ExtractorLink) -> Unit
 	): Boolean {
 		val document = app.get(data).document
-		val iframeUrl = document.selectFirst("div.player-embed > iframe")?.attr("src") ?: return false
-		loadExtractor(iframeUrl, mainUrl, subtitleCallback, callback)
+		val url = document.selectFirst("#colomb span.ud a.udl")?.attr("href")
+			?: document.selectFirst("#colomb a.udl")?.attr("href")
+			?: return false
+		loadExtractor(url, mainUrl, subtitleCallback, callback)
 		return true
 	}
 }
