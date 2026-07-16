@@ -1,8 +1,9 @@
 {
-  "name": "Cloudstream providers repository",
+  "name": "Cloudstream",
   "description": "Cloudstream extension Repository",
+  "iconUrl": "https://khadr.dev/MyLogo.svg",
   "manifestVersion": 1,
   "pluginLists": [
-    "https://raw.githubusercontent.com/khad1r/cloudstream-ext/builds/repo.json"
+    "https://raw.githubusercontent.com/khad1r/cloudstream-ext/builds/plugins.json"
   ]
 }
