@@ -32,8 +32,8 @@ class Anoboy : MainAPI() {
 
     override val mainPage = mainPageOf(
         "anime/?page=%d&status=&type=&order=update" to "Latest Release",
-        "genres/anime-movie/page/%d/" to "Super Power"
-        "genres/live-action-movie/page/%d/" to "Super Power"
+        "genres/anime-movie/page/%d/" to "Super Power",
+        "genres/live-action-movie/page/%d/" to "Super Power",
         "genres/action/page/%d/" to "Action",
         "genres/adventure/page/%d/" to "Adventure",
         "genres/romance/page/%d/" to "Romance",

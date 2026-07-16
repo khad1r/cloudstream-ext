@@ -8,6 +8,6 @@ import android.content.Context
 class AnoboyPlugin: Plugin() {
     override fun load(context: Context) {
         registerMainAPI(Anoboy())
-		registerExtractorAPI(Blogger())
+		registerExtractorAPI(Gofile())
     }
 }
