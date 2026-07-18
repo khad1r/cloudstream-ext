@@ -43,7 +43,7 @@ class Anoboy : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get("$mainUrl/${request.data.format(page)}").document
-        val items = document.select("a[rel=bookmark]:has(div.amv), a[rel=bookmark]:has(div#amv)").mapNotNull { it.toSearchResult() }
+        val items = document.select("a[rel=bookmark]:has(div.amv)").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, items)
     }
 
@@ -60,7 +60,7 @@ class Anoboy : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/?s=$query").document
-        return document.select("a[rel=bookmark]:has(div.amv), a[rel=bookmark]:has(div#amv)").mapNotNull { it.toSearchResult() }
+        return document.select("a[rel=bookmark]:has(div.amv)").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -79,28 +79,28 @@ class Anoboy : MainAPI() {
         val tags = document.selectFirst("td#genre")?.text()?.split(",")?.map { it.trim() } ?: emptyList()
         val type = if (title.contains("Movie", true)) TvType.AnimeMovie else TvType.Anime
         val year = Regex("/(\\d{4})/").find(url)?.groupValues?.get(1)?.toIntOrNull()
-        val status = if (document.selectFirst("a[href*='ongoing']") != null) ShowStatus.Ongoing else ShowStatus.Completed
-        val description = document.selectFirst(".entry-content[itemprop=description]")?.text()
-            ?: document.selectFirst("div.contentdeks")?.text()
+        val mainSeriesUrl = document.selectFirst("th:contains(Semua Episode) + td a")?.attr("href")
+        val mainDoc = if (mainSeriesUrl != null) app.get(fixUrl(mainSeriesUrl)).document else null
+
+        val statusDoc = mainDoc ?: document
+        val status = if (statusDoc.selectFirst("a[href*='ongoing']") != null) ShowStatus.Ongoing else ShowStatus.Completed
+        val description = document.selectFirst("div.contentdeks")?.text()
+            ?: document.selectFirst(".entry-content[itemprop=description]")?.text()
             ?: ""
 
         // Episodes extraction
         val episodesList = document.select("ul.lcp_catlist li a")
         val episodes = if (episodesList.isNotEmpty()) {
             episodesList.map { parseEpisode(it) }
+        } else if (mainDoc != null) {
+            mainDoc.select("ul.lcp_catlist li a").map { parseEpisode(it) }
         } else {
-            val mainSeriesUrl = document.selectFirst("th:contains(Semua Episode) + td a")?.attr("href")
-            if (mainSeriesUrl != null) {
-                val mainDoc = app.get(fixUrl(mainSeriesUrl)).document
-                mainDoc.select("ul.lcp_catlist li a").map { parseEpisode(it) }
-            } else {
-                val episodeNumber = title.replace(Regex(".*Episode\\s*(\\d+).*"), "$1").toIntOrNull()
-                listOf(newEpisode(url) {
-                    this.data = url
-                    this.name = "Episode ${episodeNumber ?: 1}"
-                    this.episode = episodeNumber ?: 1
-                })
-            }
+            val episodeNumber = title.replace(Regex(".*Episode\\s*(\\d+).*"), "$1").toIntOrNull()
+            listOf(newEpisode(url) {
+                this.data = url
+                this.name = "Episode ${episodeNumber ?: 1}"
+                this.episode = episodeNumber ?: 1
+            })
         }.reversed()
 
         return newAnimeLoadResponse(title, url, type) {
