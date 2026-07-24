@@ -9,7 +9,6 @@ const hostPool = [
     "https://api4.aoneroom.com",
     "https://api4sg.aoneroom.com",
     "https://api3.aoneroom.com",
-    "https://api6sg.aoneroom.com",
     "https://api.inmoviebox.com"
 ];
 
@@ -88,20 +87,35 @@ async function checkHost(url, secretKey) {
         });
         clearTimeout(timeout);
         console.log(`Host ${url} responded with HTTP ${res.status}`);
-        return res.status < 400;
+        let token = null;
+        const xUser = res.headers.get("x-user");
+        if (xUser) {
+            try {
+                const parsed = JSON.parse(xUser);
+                if (parsed && parsed.token) {
+                    token = parsed.token;
+                }
+            } catch (_) {}
+        }
+        return { ok: res.status < 400, token };
     } catch (e) {
         console.warn(`Failed to connect to ${url}: ${e.message}`);
-        return false;
+        return { ok: false, token: null };
     }
 }
 
 async function updateMovieboxConstants() {
     const secretKey = await fetchLatestSecretKey();
     const activeHosts = [];
+    let acquiredToken = null;
 
     for (const host of hostPool) {
-        if (await checkHost(host, secretKey)) {
+        const result = await checkHost(host, secretKey);
+        if (result.ok) {
             activeHosts.push(host);
+            if (result.token && !acquiredToken) {
+                acquiredToken = result.token;
+            }
         }
     }
 
@@ -112,6 +126,9 @@ async function updateMovieboxConstants() {
 
     const primaryHost = activeHosts[0];
     console.log(`Primary active Moviebox host: ${primaryHost}`);
+    if (acquiredToken) {
+        console.log(`Acquired active authToken: ${acquiredToken.substring(0, 30)}...`);
+    }
 
     const movieboxPath = path.join(__dirname, 'src', 'main', 'kotlin', 'com', 'Moviebox', 'Moviebox.kt');
     if (fs.existsSync(movieboxPath)) {
@@ -124,8 +141,14 @@ async function updateMovieboxConstants() {
             /(private\s+var\s+secretKey\s*=\s*")[^"]+(")/,
             `$1${secretKey}$2`
         );
+        if (acquiredToken) {
+            content = content.replace(
+                /(private\s+var\s+authToken\s*:\s*String\?\s*=\s*")[^"]+(")/,
+                `$1${acquiredToken}$2`
+            );
+        }
         fs.writeFileSync(movieboxPath, content, 'utf8');
-        console.log(`Updated Moviebox.kt mainUrl: ${primaryHost}, secretKey: ${secretKey}`);
+        console.log(`Updated Moviebox.kt mainUrl: ${primaryHost}, secretKey: ${secretKey}, authToken updated.`);
     } else {
         console.warn(`Moviebox.kt not found at: ${movieboxPath}`);
     }
