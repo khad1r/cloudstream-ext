@@ -39,7 +39,7 @@ class Moviebox : MainAPI() {
     private val userAgent = "com.community.oneroom/50020045 (Linux; U; Android 11; en_US; Redmi; Build/RP1A.200720.011; Cronet/135.0.7012.3)"
     private val clientInfo = """{"package_name":"com.community.oneroom","version_name":"3.0.03.0529.03","version_code":50020045,"os":"android","os_version":"11","install_ch":"ps","device_id":"8a9f3b2c1d4e5f6a7b8c9d0e1f2a3b4c","install_store":"ps","gaid":"12345678-1234-1234-1234-123456789abc","brand":"Redmi","model":"2201117TY","system_language":"en","net":"NETWORK_WIFI","region":"US","timezone":"America/New_York","sp_code":"40401","X-Play-Mode":"2"}"""
     private val spoofedIp = "103.241.12.34"
-    private var authToken: String? = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjU0MDk1MjU2NTYxMTM4OTM4NTYsImV4cCI6MTc5MjY2NDUyMiwiaWF0IjoxNzg0ODg4MjIyfQ.4BXt73mFT0SaJPGhQCeRt6_O0ZJbekbZV6bueOn5rXc"
+    private var authToken: String? = null
     private var secretKey = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O"
 
     private fun md5Hex(data: ByteArray): String {
@@ -352,19 +352,28 @@ class Moviebox : MainAPI() {
         val season = media.season ?: 0
         val episode = media.episode ?: 0
 
-        val path = if (season == 0 && episode == 0) {
-            "/wefeed-mobile-bff/subject-api/resource?subjectId=$id&page=1&perPage=20"
-        } else {
-            "/wefeed-mobile-bff/subject-api/resource?subjectId=$id&se=$season&ep=$episode&page=1&perPage=20"
-        }
-
+        val resolutions = listOf("1080", "720", "480", "360", "")
         val resourceLinks = mutableListOf<ResourceItem>()
-        try {
-            val response = makeApiRequest("GET", path)
-            val items = response.parsedSafe<ResourceData>()?.data?.list
-                ?: response.parsedSafe<ResourceData>()?.list
-            items?.let { resourceLinks.addAll(it) }
-        } catch (_: Exception) {}
+
+        resolutions.amap { res ->
+            val resParam = if (res.isNotEmpty()) "&resolution=$res" else ""
+            val path = if (season == 0 && episode == 0) {
+                "/wefeed-mobile-bff/subject-api/resource?subjectId=$id&page=1&perPage=20$resParam"
+            } else {
+                "/wefeed-mobile-bff/subject-api/resource?subjectId=$id&se=$season&ep=$episode&page=1&perPage=20$resParam"
+            }
+
+            try {
+                val response = makeApiRequest("GET", path)
+                val items = response.parsedSafe<ResourceData>()?.data?.list
+                    ?: response.parsedSafe<ResourceData>()?.list
+                items?.let {
+                    synchronized(resourceLinks) {
+                        resourceLinks.addAll(it)
+                    }
+                }
+            } catch (_: Exception) {}
+        }
 
         val uniqueStreams = resourceLinks.distinctBy { it.resourceLink ?: it.url }
         var firstResourceId: String? = null
@@ -374,9 +383,13 @@ class Moviebox : MainAPI() {
             if (firstResourceId == null) {
                 firstResourceId = item.id ?: item.resourceId
             }
-            val qualityStr = item.resolution?.toString() ?: item.quality ?: "720"
-            callback(newExtractorLink(this.name, this.name, link, INFER_TYPE) {
-                this.quality = getQualityFromName(qualityStr)
+            val qualityVal = item.resolution?.toString()?.toIntOrNull() ?: getQualityFromName(item.quality ?: "").let { if (it > 0) it else 720 }
+            val isHevc = link.contains("h265", ignoreCase = true)
+            val displayName = if (isHevc) "Moviebox ${qualityVal}p (HEVC)" else "Moviebox ${qualityVal}p"
+
+            callback(newExtractorLink(displayName, displayName, link, INFER_TYPE) {
+                this.quality = qualityVal
+                this.headers = mapOf("User-Agent" to userAgent)
             })
         }
 

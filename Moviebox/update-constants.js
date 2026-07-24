@@ -87,35 +87,20 @@ async function checkHost(url, secretKey) {
         });
         clearTimeout(timeout);
         console.log(`Host ${url} responded with HTTP ${res.status}`);
-        let token = null;
-        const xUser = res.headers.get("x-user");
-        if (xUser) {
-            try {
-                const parsed = JSON.parse(xUser);
-                if (parsed && parsed.token) {
-                    token = parsed.token;
-                }
-            } catch (_) {}
-        }
-        return { ok: res.status < 400, token };
+        return res.status < 400;
     } catch (e) {
         console.warn(`Failed to connect to ${url}: ${e.message}`);
-        return { ok: false, token: null };
+        return false;
     }
 }
 
 async function updateMovieboxConstants() {
     const secretKey = await fetchLatestSecretKey();
     const activeHosts = [];
-    let acquiredToken = null;
 
     for (const host of hostPool) {
-        const result = await checkHost(host, secretKey);
-        if (result.ok) {
+        if (await checkHost(host, secretKey)) {
             activeHosts.push(host);
-            if (result.token && !acquiredToken) {
-                acquiredToken = result.token;
-            }
         }
     }
 
@@ -126,9 +111,6 @@ async function updateMovieboxConstants() {
 
     const primaryHost = activeHosts[0];
     console.log(`Primary active Moviebox host: ${primaryHost}`);
-    if (acquiredToken) {
-        console.log(`Acquired active authToken: ${acquiredToken.substring(0, 30)}...`);
-    }
 
     const movieboxPath = path.join(__dirname, 'src', 'main', 'kotlin', 'com', 'Moviebox', 'Moviebox.kt');
     if (fs.existsSync(movieboxPath)) {
@@ -141,14 +123,8 @@ async function updateMovieboxConstants() {
             /(private\s+var\s+secretKey\s*=\s*")[^"]+(")/,
             `$1${secretKey}$2`
         );
-        if (acquiredToken) {
-            content = content.replace(
-                /(private\s+var\s+authToken\s*:\s*String\?\s*=\s*")[^"]+(")/,
-                `$1${acquiredToken}$2`
-            );
-        }
         fs.writeFileSync(movieboxPath, content, 'utf8');
-        console.log(`Updated Moviebox.kt mainUrl: ${primaryHost}, secretKey: ${secretKey}, authToken updated.`);
+        console.log(`Updated Moviebox.kt mainUrl: ${primaryHost}, secretKey: ${secretKey}`);
     } else {
         console.warn(`Moviebox.kt not found at: ${movieboxPath}`);
     }
