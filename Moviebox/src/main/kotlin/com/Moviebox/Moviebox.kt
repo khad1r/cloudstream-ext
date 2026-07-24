@@ -39,7 +39,7 @@ class Moviebox : MainAPI() {
     private val userAgent = "com.community.oneroom/50020045 (Linux; U; Android 11; en_US; Redmi; Build/RP1A.200720.011; Cronet/135.0.7012.3)"
     private val clientInfo = """{"package_name":"com.community.oneroom","version_name":"3.0.03.0529.03","version_code":50020045,"os":"android","os_version":"11","install_ch":"ps","device_id":"8a9f3b2c1d4e5f6a7b8c9d0e1f2a3b4c","install_store":"ps","gaid":"12345678-1234-1234-1234-123456789abc","brand":"Redmi","model":"2201117TY","system_language":"en","net":"NETWORK_WIFI","region":"US","timezone":"America/New_York","sp_code":"40401","X-Play-Mode":"2"}"""
     private val spoofedIp = "103.241.12.34"
-    private var authToken: String? = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjU0MDk1MjU2NTYxMTM4OTM4NTYsImV4cCI6MTc5MjY2MzA3NSwiaWF0IjoxNzg0ODg2Nzc1fQ.4LehhcAAVBWbBhOp6Ywc6dqhVAN5BAIIlpfiH7ETIdE"
+    private var authToken: String? = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjU0MDk1MjU2NTYxMTM4OTM4NTYsImV4cCI6MTc5MjY2NDUyMiwiaWF0IjoxNzg0ODg4MjIyfQ.4BXt73mFT0SaJPGhQCeRt6_O0ZJbekbZV6bueOn5rXc"
     private var secretKey = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O"
 
     private fun md5Hex(data: ByteArray): String {
