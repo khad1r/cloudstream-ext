@@ -6,20 +6,172 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.nicehttp.NiceResponse
 import com.lagradost.nicehttp.RequestBodyTypes
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.ByteString.Companion.decodeBase64
+import okio.ByteString.Companion.toByteString
+import java.net.URI
+import java.security.MessageDigest
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 class Moviebox : MainAPI() {
 
-    override var mainUrl = "https://moviebox.ph"
-    private val apiUrl = "https://fmoviesunblocked.net"
+    override var mainUrl = "https://api6.aoneroom.com"
     override val instantLinkLoading = true
     override var name = "Moviebox"
     override val hasMainPage = true
     override val hasQuickSearch = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime, TvType.AsianDrama)
+
+    private val hostPool = listOf(
+        "https://api6.aoneroom.com",
+        "https://api5.aoneroom.com",
+        "https://api4.aoneroom.com",
+        "https://api4sg.aoneroom.com",
+        "https://api3.aoneroom.com",
+        "https://api6sg.aoneroom.com",
+        "https://api.inmoviebox.com"
+    )
+    private var activeHostIdx = 0
+
+    private val userAgent = "com.community.oneroom/50020045 (Linux; U; Android 11; en_US; Redmi; Build/RP1A.200720.011; Cronet/135.0.7012.3)"
+    private val clientInfo = """{"package_name":"com.community.oneroom","version_name":"3.0.03.0529.03","version_code":50020045,"os":"android","os_version":"11","install_ch":"ps","device_id":"8a9f3b2c1d4e5f6a7b8c9d0e1f2a3b4c","install_store":"ps","gaid":"12345678-1234-1234-1234-123456789abc","brand":"Redmi","model":"2201117TY","system_language":"en","net":"NETWORK_WIFI","region":"US","timezone":"America/New_York","sp_code":"40401","X-Play-Mode":"2"}"""
+    private val spoofedIp = "103.241.12.34"
+    private var authToken: String? = null
+    private var secretKey = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O"
+
+    private fun md5Hex(data: ByteArray): String {
+        val md = MessageDigest.getInstance("MD5")
+        return md.digest(data).joinToString("") { "%02x".format(it) }
+    }
+
+    private fun base64Decode(valStr: String): ByteArray {
+        var padded = valStr
+        val padding = (4 - padded.length % 4) % 4
+        if (padding > 0) padded += "=".repeat(padding)
+        return padded.decodeBase64()?.toByteArray() ?: byteArrayOf()
+    }
+
+    private fun base64Encode(data: ByteArray): String {
+        return data.toByteString().base64()
+    }
+
+    private fun generateXClientToken(ts: Long): String {
+        val tsStr = ts.toString()
+        val reversedTs = tsStr.reversed()
+        val hashVal = md5Hex(reversedTs.toByteArray(Charsets.UTF_8))
+        return "$tsStr,$hashVal"
+    }
+
+    private fun generateXTrSignature(
+        method: String,
+        accept: String = "application/json",
+        contentType: String = "application/json",
+        fullUrl: String,
+        body: String?,
+        timestampMs: Long
+    ): String {
+        val uri = URI(fullUrl)
+        val path = uri.path ?: ""
+        val query = uri.rawQuery
+        val sortedQuery = if (query.isNullOrEmpty()) "" else {
+            query.split("&")
+                .map { it.split("=", limit = 2) }
+                .sortedBy { it[0] }
+                .joinToString("&") { if (it.size > 1) "${it[0]}=${it[1]}" else it[0] }
+        }
+        val canonicalUrl = if (sortedQuery.isEmpty()) path else "$path?$sortedQuery"
+
+        val (bodyHash, bodyLength) = if (body != null) {
+            val bytes = body.toByteArray(Charsets.UTF_8)
+            val truncated = if (bytes.size > 102400) bytes.copyOf(102400) else bytes
+            Pair(md5Hex(truncated), bytes.size.toString())
+        } else {
+            Pair("", "")
+        }
+
+        val canonicalString = listOf(
+            method.uppercase(),
+            accept,
+            contentType,
+            bodyLength,
+            timestampMs.toString(),
+            bodyHash,
+            canonicalUrl
+        ).joinToString("\n")
+
+        val secretBytes = base64Decode(secretKey)
+        val mac = Mac.getInstance("HmacMD5")
+        mac.init(SecretKeySpec(secretBytes, "HmacMD5"))
+        val sigBytes = mac.doFinal(canonicalString.toByteArray(Charsets.UTF_8))
+        val sigB64 = base64Encode(sigBytes)
+
+        return "$timestampMs|2|$sigB64"
+    }
+
+    private fun getHeaders(method: String, fullUrl: String, body: String? = null): Map<String, String> {
+        val ts = System.currentTimeMillis()
+        val clientToken = generateXClientToken(ts)
+        val signature = generateXTrSignature(method, "application/json", "application/json", fullUrl, body, ts)
+
+        val headers = mutableMapOf(
+            "User-Agent" to userAgent,
+            "Accept" to "application/json",
+            "Content-Type" to "application/json",
+            "Connection" to "keep-alive",
+            "X-Client-Token" to clientToken,
+            "x-tr-signature" to signature,
+            "X-Client-Info" to clientInfo,
+            "X-Client-Status" to "0",
+            "X-Forwarded-For" to spoofedIp
+        )
+
+        authToken?.let {
+            headers["Authorization"] = "Bearer $it"
+        }
+
+        return headers
+    }
+
+    private suspend fun makeApiRequest(method: String, pathAndQuery: String, bodyJson: String? = null): NiceResponse {
+        val startIdx = activeHostIdx
+        for (i in hostPool.indices) {
+            val idx = (startIdx + i) % hostPool.size
+            val host = hostPool[idx]
+            val fullUrl = "$host$pathAndQuery"
+            val headers = getHeaders(method, fullUrl, bodyJson)
+
+            try {
+                val response = if (method.equals("POST", ignoreCase = true)) {
+                    val requestBody = (bodyJson ?: "").toRequestBody("application/json".toMediaTypeOrNull())
+                    app.post(fullUrl, headers = headers, requestBody = requestBody)
+                } else {
+                    app.get(fullUrl, headers = headers)
+                }
+
+                response.headers["x-user"]?.let { xUser ->
+                    try {
+                        val token = parseJson<Map<String, Any>>(xUser)["token"] as? String
+                        if (!token.isNullOrEmpty()) {
+                            authToken = token
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                if (response.isSuccessful) {
+                    activeHostIdx = idx
+                    return response
+                }
+            } catch (_: Exception) {
+                continue
+            }
+        }
+        throw ErrorLoadingException("MovieBox API host pool exhausted")
+    }
 
     override val mainPage = mainPageOf(
         "872031290915189720" to "Trending Now",
@@ -36,47 +188,78 @@ class Moviebox : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = "$mainUrl/wefeed-h5-bff/web/ranking-list/content?id=${request.data}&page=$page&perPage=12"
-        val home = app.get(url).parsedSafe<Media>()?.data?.subjectList?.map { it.toSearchResponse(this) }
-            ?: throw ErrorLoadingException("No Data Found")
-        return newHomePageResponse(request.name, home)
+        val path = "/wefeed-mobile-bff/tab-operating?page=$page&tabId=${request.data}&version="
+        val res = makeApiRequest("GET", path)
+        val items = res.parsedSafe<MediaData>()?.data?.let { data ->
+            data.subjectList ?: data.items
+        }?.mapNotNull { it.toSearchResponse(this) } ?: throw ErrorLoadingException("No Data Found")
+        return newHomePageResponse(request.name, items)
     }
 
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val body = mapOf("keyword" to query, "page" to "1", "perPage" to "0", "subjectType" to "0")
-            .toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
-        return app.post("$mainUrl/wefeed-h5-bff/web/subject/search", requestBody = body)
-            .parsedSafe<Media>()?.data?.items?.map { it.toSearchResponse(this) } ?: throw ErrorLoadingException()
+        val body = mapOf(
+            "keyword" to query,
+            "page" to 1,
+            "perPage" to 20,
+            "subjectType" to "All",
+            "tabId" to "All"
+        ).toJson()
+        val res = makeApiRequest("POST", "/wefeed-mobile-bff/subject-api/search/v2", body)
+        return res.parsedSafe<MediaData>()?.data?.items?.mapNotNull { it.toSearchResponse(this) }
+            ?: throw ErrorLoadingException()
     }
 
     override suspend fun load(url: String): LoadResponse {
         val id = url.substringAfterLast("/")
-        val doc = app.get("$mainUrl/wefeed-h5-bff/web/subject/detail?subjectId=$id").parsedSafe<MediaDetail>()?.data
-        val subject = doc?.subject
+        val res = makeApiRequest("GET", "/wefeed-mobile-bff/subject-api/get?subjectId=$id")
+        val doc = res.parsedSafe<MediaDetailData>()?.data
+        val subject = doc?.subject ?: doc?.item ?: doc
         val title = subject?.title ?: ""
-        val poster = subject?.cover?.url
+        val poster = subject?.cover?.url ?: subject?.coverUrl
         val tags = subject?.genre?.split(",")?.map { it.trim() }
         val year = subject?.releaseDate?.substringBefore("-")?.toIntOrNull()
-        val tvType = if (subject?.subjectType == 2) TvType.TvSeries else TvType.Movie
+        val stype = subject?.subjectType ?: subject?.stype ?: 1
+        val tvType = if (stype == 2) TvType.TvSeries else TvType.Movie
         val description = subject?.description
         val trailer = subject?.trailer?.videoAddress?.url
         val score = Score.from10(subject?.imdbRatingValue)
         val actors = doc?.stars?.mapNotNull { cast ->
             ActorData(Actor(cast.name ?: return@mapNotNull null, cast.avatarUrl), roleString = cast.character)
         }?.distinctBy { it.actor }
-        val recommendations = app.get("$mainUrl/wefeed-h5-bff/web/subject/detail-rec?subjectId=$id&page=1&perPage=12")
-            .parsedSafe<Media>()?.data?.items?.map { it.toSearchResponse(this) }
 
         return if (tvType == TvType.TvSeries) {
-            val episodes = doc?.resource?.seasons?.map { seasons ->
-                (if (seasons.allEp.isNullOrEmpty()) (1..seasons.maxEp!!) else seasons.allEp.split(",").map { it.toInt() })
-                    .map { episode -> newEpisode(LoadData(id, seasons.se, episode, subject?.detailPath).toJson()) {
-                        this.season = seasons.se
-                        this.episode = episode
-                    }}
-            }?.flatten() ?: emptyList()
+            val seasonRes = try {
+                makeApiRequest("GET", "/wefeed-mobile-bff/subject-api/season-info?subjectId=$id")
+            } catch (_: Exception) { null }
+            val seasonsList = seasonRes?.parsedSafe<SeasonInfoData>()?.data?.seasons
+                ?: doc?.resource?.seasons
+
+            val episodes = if (!seasonsList.isNullOrEmpty()) {
+                seasonsList.map { season ->
+                    val seNum = season.se ?: 1
+                    val epList = if (!season.allEp.isNullOrEmpty()) {
+                        season.allEp.split(",").mapNotNull { it.trim().toIntOrNull() }
+                    } else if (season.maxEp != null && season.maxEp > 0) {
+                        (1..season.maxEp).toList()
+                    } else {
+                        listOf(1)
+                    }
+                    epList.map { epNum ->
+                        newEpisode(LoadData(id, seNum, epNum).toJson()) {
+                            this.season = seNum
+                            this.episode = epNum
+                        }
+                    }
+                }.flatten()
+            } else {
+                listOf(newEpisode(LoadData(id, 1, 1).toJson()) {
+                    this.season = 1
+                    this.episode = 1
+                })
+            }
+
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.year = year
@@ -84,95 +267,165 @@ class Moviebox : MainAPI() {
                 this.tags = tags
                 this.score = score
                 this.actors = actors
-                this.recommendations = recommendations
                 addTrailer(trailer, addRaw = true)
             }
         } else {
-            newMovieLoadResponse(title, url, TvType.Movie, LoadData(id, detailPath = subject?.detailPath).toJson()) {
+            newMovieLoadResponse(title, url, TvType.Movie, LoadData(id).toJson()) {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = description
                 this.tags = tags
                 this.score = score
                 this.actors = actors
-                this.recommendations = recommendations
                 addTrailer(trailer, addRaw = true)
             }
         }
     }
 
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
         val media = parseJson<LoadData>(data)
-        val referer = "$apiUrl/spa/videoPlayPage/movies/${media.detailPath}?id=${media.id}&type=/movie/detail&lang=en"
-        val streams = app.get("$apiUrl/wefeed-h5-bff/web/subject/play?subjectId=${media.id}&se=${media.season ?: 0}&ep=${media.episode ?: 0}", referer = referer)
-            .parsedSafe<Media>()?.data?.streams
+        val id = media.id ?: return false
+        val season = media.season ?: 0
+        val episode = media.episode ?: 0
 
-        streams?.reversed()?.distinctBy { it.url }?.forEach { source ->
-            callback(newExtractorLink(this.name, this.name, source.url ?: return@forEach, INFER_TYPE) {
-                this.referer = "$apiUrl/"
-                this.quality = getQualityFromName(source.resolutions)
+        val resolutions = listOf("1080", "720", "480", "360", "")
+        val resourceLinks = mutableListOf<ResourceItem>()
+
+        for (res in resolutions) {
+            val resParam = if (res.isNotEmpty()) "&resolution=$res" else ""
+            val path = if (season == 0 && episode == 0) {
+                "/wefeed-mobile-bff/subject-api/resource?subjectId=$id&page=1&perPage=20$resParam"
+            } else {
+                "/wefeed-mobile-bff/subject-api/resource?subjectId=$id&se=$season&ep=$episode&page=1&perPage=20$resParam"
+            }
+
+            try {
+                val response = makeApiRequest("GET", path)
+                val items = response.parsedSafe<ResourceData>()?.data?.list
+                    ?: response.parsedSafe<ResourceData>()?.list
+                items?.let { resourceLinks.addAll(it) }
+            } catch (_: Exception) {}
+        }
+
+        val uniqueStreams = resourceLinks.distinctBy { it.resourceLink ?: it.url }
+        var firstResourceId: String? = null
+
+        for (item in uniqueStreams) {
+            val link = item.resourceLink ?: item.url ?: continue
+            if (firstResourceId == null) {
+                firstResourceId = item.id ?: item.resourceId
+            }
+            val qualityStr = item.resolution ?: item.quality ?: "720"
+            callback(newExtractorLink(this.name, this.name, link, INFER_TYPE) {
+                this.quality = getQualityFromName(qualityStr)
             })
         }
 
-        val id = streams?.first()?.id
-        val format = streams?.first()?.format
-        app.get("$apiUrl/wefeed-h5-bff/web/subject/caption?format=$format&id=$id&subjectId=${media.id}", referer = referer)
-            .parsedSafe<Media>()?.data?.captions?.forEach { subtitle ->
-                subtitleCallback(newSubtitleFile(subtitle.lanName ?: "", subtitle.url ?: return@forEach))
-            }
-
-        return true
-    }
-
-    data class LoadData(val id: String? = null, val season: Int? = null, val episode: Int? = null, val detailPath: String? = null)
-
-    data class Media(@JsonProperty("data") val data: Data? = null) {
-        data class Data(
-            @JsonProperty("subjectList") val subjectList: ArrayList<Items>? = arrayListOf(),
-            @JsonProperty("items") val items: ArrayList<Items>? = arrayListOf(),
-            @JsonProperty("streams") val streams: ArrayList<Streams>? = arrayListOf(),
-            @JsonProperty("captions") val captions: ArrayList<Captions>? = arrayListOf()
-        ) {
-            data class Streams(@JsonProperty("id") val id: String? = null, @JsonProperty("format") val format: String? = null, @JsonProperty("url") val url: String? = null, @JsonProperty("resolutions") val resolutions: String? = null)
-            data class Captions(@JsonProperty("lan") val lan: String? = null, @JsonProperty("lanName") val lanName: String? = null, @JsonProperty("url") val url: String? = null)
+        firstResourceId?.let { resId ->
+            try {
+                val capPath = "/wefeed-mobile-bff/subject-api/get-ext-captions?subjectId=$id&resourceId=$resId"
+                val capRes = makeApiRequest("GET", capPath)
+                val captions = capRes.parsedSafe<CaptionData>()?.data
+                    ?: capRes.parsedSafe<List<CaptionItem>>()
+                captions?.forEach { cap ->
+                    val name = cap.lanName ?: cap.language ?: cap.lan ?: "Subtitle"
+                    val subUrl = cap.url ?: cap.link ?: return@forEach
+                    subtitleCallback(newSubtitleFile(name, subUrl))
+                }
+            } catch (_: Exception) {}
         }
+
+        return uniqueStreams.isNotEmpty()
     }
 
-    data class MediaDetail(@JsonProperty("data") val data: Data? = null) {
-        data class Data(
-            @JsonProperty("subject") val subject: Items? = null,
-            @JsonProperty("stars") val stars: ArrayList<Stars>? = arrayListOf(),
-            @JsonProperty("resource") val resource: Resource? = null
-        ) {
-            data class Stars(@JsonProperty("name") val name: String? = null, @JsonProperty("character") val character: String? = null, @JsonProperty("avatarUrl") val avatarUrl: String? = null)
-            data class Resource(@JsonProperty("seasons") val seasons: ArrayList<Seasons>? = arrayListOf()) {
-                data class Seasons(@JsonProperty("se") val se: Int? = null, @JsonProperty("maxEp") val maxEp: Int? = null, @JsonProperty("allEp") val allEp: String? = null)
-            }
-        }
+    data class LoadData(val id: String? = null, val season: Int? = null, val episode: Int? = null)
+
+    data class MediaData(@JsonProperty("data") val data: DataContent? = null) {
+        data class DataContent(
+            @JsonProperty("subjectList") val subjectList: List<Items>? = null,
+            @JsonProperty("items") val items: List<Items>? = null
+        )
     }
+
+    data class MediaDetailData(@JsonProperty("data") val data: Items? = null)
+
+    data class SeasonInfoData(@JsonProperty("data") val data: SeasonContent? = null) {
+        data class SeasonContent(
+            @JsonProperty("seasons") val seasons: List<Seasons>? = null
+        )
+    }
+
+    data class Seasons(
+        @JsonProperty("se") val se: Int? = null,
+        @JsonProperty("maxEp") val maxEp: Int? = null,
+        @JsonProperty("allEp") val allEp: String? = null
+    )
+
+    data class ResourceData(
+        @JsonProperty("data") val data: ResourceList? = null,
+        @JsonProperty("list") val list: List<ResourceItem>? = null
+    ) {
+        data class ResourceList(@JsonProperty("list") val list: List<ResourceItem>? = null)
+    }
+
+    data class ResourceItem(
+        @JsonProperty("id") val id: String? = null,
+        @JsonProperty("resourceId") val resourceId: String? = null,
+        @JsonProperty("resourceLink") val resourceLink: String? = null,
+        @JsonProperty("url") val url: String? = null,
+        @JsonProperty("resolution") val resolution: String? = null,
+        @JsonProperty("quality") val quality: String? = null
+    )
+
+    data class CaptionData(
+        @JsonProperty("data") val data: List<CaptionItem>? = null
+    )
+
+    data class CaptionItem(
+        @JsonProperty("lanName") val lanName: String? = null,
+        @JsonProperty("language") val language: String? = null,
+        @JsonProperty("lan") val lan: String? = null,
+        @JsonProperty("url") val url: String? = null,
+        @JsonProperty("link") val link: String? = null
+    )
 
     data class Items(
         @JsonProperty("subjectId") val subjectId: String? = null,
         @JsonProperty("subjectType") val subjectType: Int? = null,
+        @JsonProperty("stype") val stype: Int? = null,
         @JsonProperty("title") val title: String? = null,
         @JsonProperty("description") val description: String? = null,
         @JsonProperty("releaseDate") val releaseDate: String? = null,
-        @JsonProperty("duration") val duration: Long? = null,
         @JsonProperty("genre") val genre: String? = null,
         @JsonProperty("cover") val cover: Cover? = null,
+        @JsonProperty("coverUrl") val coverUrl: String? = null,
         @JsonProperty("imdbRatingValue") val imdbRatingValue: String? = null,
-        @JsonProperty("countryName") val countryName: String? = null,
         @JsonProperty("trailer") val trailer: Trailer? = null,
-        @JsonProperty("detailPath") val detailPath: String? = null
+        @JsonProperty("subject") val subject: Items? = null,
+        @JsonProperty("item") val item: Items? = null,
+        @JsonProperty("stars") val stars: List<Stars>? = null,
+        @JsonProperty("resource") val resource: ResourceContainer? = null
     ) {
-        fun toSearchResponse(provider: Moviebox): SearchResponse {
-            return provider.newMovieSearchResponse(title ?: "", subjectId!!, if (subjectType == 1) TvType.Movie else TvType.TvSeries, false) {
-                this.posterUrl = cover?.url
+        fun toSearchResponse(provider: Moviebox): SearchResponse? {
+            val sid = subjectId ?: return null
+            val t = title ?: ""
+            val type = if ((subjectType ?: stype ?: 1) == 2) TvType.TvSeries else TvType.Movie
+            val poster = cover?.url ?: coverUrl
+            return provider.newMovieSearchResponse(t, sid, type, false) {
+                this.posterUrl = poster
             }
         }
+
         data class Cover(@JsonProperty("url") val url: String? = null)
         data class Trailer(@JsonProperty("videoAddress") val videoAddress: VideoAddress? = null) {
             data class VideoAddress(@JsonProperty("url") val url: String? = null)
         }
+        data class Stars(@JsonProperty("name") val name: String? = null, @JsonProperty("character") val character: String? = null, @JsonProperty("avatarUrl") val avatarUrl: String? = null)
+        data class ResourceContainer(@JsonProperty("seasons") val seasons: List<Seasons>? = null)
     }
 }

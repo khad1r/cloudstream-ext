@@ -49,12 +49,13 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/src
           node Anoboy/update-constants.js
+          node Moviebox/update-constants.js
           
           # Commit and push source updates back to repo
           git config --local user.email "actions@github.com"
           git config --local user.name "GitHub Actions"
-          git add Anoboy/src/main/kotlin/com/Anoboy/Anoboy.kt Anoboy/src/main/kotlin/com/Anoboy/Extractor.kt
-          git commit -m "Auto-update Anoboy domain and Gofile salt [skip ci]" || echo "No source changes to commit"
+          git add Anoboy/src/main/kotlin/com/Anoboy/Anoboy.kt Anoboy/src/main/kotlin/com/Anoboy/Extractor.kt Moviebox/src/main/kotlin/com/Moviebox/Moviebox.kt
+          git commit -m "Auto-update provider constants [skip ci]" || echo "No source changes to commit"
           git push origin HEAD:${{ github.ref_name }} || echo "No source changes to push"
 
           chmod +x gradlew

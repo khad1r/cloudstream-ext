@@ -65,43 +65,89 @@ class Anoboy : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
-        val title = document.selectFirst("div.pagetitle h1")?.text()
-            ?.replace("Subtitle Indonesia", "")
-            ?.replace("Episode\\s+\\d+".toRegex(), "")
-            ?.trim()
-            ?: document.selectFirst("h2.entry-title")?.text()
-                ?.replace("Subtitle Indonesia", "")
-                ?.replace("Episode\\s+\\d+".toRegex(), "")
-                ?.trim()
-            ?: return null
-
-        val poster = fixUrlNull(document.selectFirst("div.sisi.entry-content img")?.attr("src"))
-        val tags = document.selectFirst("td#genre")?.text()?.split(",")?.map { it.trim() } ?: emptyList()
-        val type = if (title.contains("Movie", true)) TvType.AnimeMovie else TvType.Anime
-        val year = Regex("/(\\d{4})/").find(url)?.groupValues?.get(1)?.toIntOrNull()
         val mainSeriesUrl = document.selectFirst("th:contains(Semua Episode) + td a")?.attr("href")
         val mainDoc = if (mainSeriesUrl != null) app.get(fixUrl(mainSeriesUrl)).document else null
-
         val statusDoc = mainDoc ?: document
+
+        val rawTitle = statusDoc.selectFirst("div.pagetitle h1")?.text()
+            ?: statusDoc.selectFirst("h2.entry-title")?.text()
+            ?: document.selectFirst("div.pagetitle h1")?.text()
+            ?: document.selectFirst("h2.entry-title")?.text()
+            ?: return null
+
+        val title = rawTitle
+            .replace("Subtitle Indonesia", "")
+            .replace(Regex("Episode\\s+\\d+.*", RegexOption.IGNORE_CASE), "")
+            .replace(Regex(",?\\s*Season\\s+[\\d\\+\\s-]+.*", RegexOption.IGNORE_CASE), "")
+            .trim()
+
+        val poster = fixUrlNull(document.selectFirst("div.sisi.entry-content img")?.attr("src"))
+            ?: fixUrlNull(statusDoc.selectFirst("div.sisi.entry-content img")?.attr("src"))
+        val tags = document.selectFirst("td#genre")?.text()?.split(",")?.map { it.trim() }
+            ?: statusDoc.selectFirst("td#genre")?.text()?.split(",")?.map { it.trim() }
+            ?: emptyList()
+        val type = if (title.contains("Movie", true)) TvType.AnimeMovie else TvType.Anime
+        val year = Regex("/(\\d{4})/").find(url)?.groupValues?.get(1)?.toIntOrNull()
+
         val status = if (statusDoc.selectFirst("a[href*='ongoing']") != null) ShowStatus.Ongoing else ShowStatus.Completed
         val description = document.selectFirst("div.contentdeks")?.text()
             ?: document.selectFirst(".entry-content[itemprop=description]")?.text()
+            ?: statusDoc.selectFirst("div.contentdeks")?.text()
+            ?: statusDoc.selectFirst(".entry-content[itemprop=description]")?.text()
             ?: ""
 
-        // Episodes extraction
-        val episodesList = document.select("ul.lcp_catlist li a")
-        val episodes = if (episodesList.isNotEmpty()) {
-            episodesList.map { parseEpisode(it) }
-        } else if (mainDoc != null) {
-            mainDoc.select("ul.lcp_catlist li a").map { parseEpisode(it) }
-        } else {
-            val episodeNumber = title.replace(Regex(".*Episode\\s*(\\d+).*"), "$1").toIntOrNull()
-            listOf(newEpisode(url) {
-                this.data = url
-                this.name = "Episode ${episodeNumber ?: 1}"
-                this.episode = episodeNumber ?: 1
-            })
-        }.reversed()
+        // Episodes extraction with season support
+        val hqElements = statusDoc.select("div.hq")
+        val episodes = mutableListOf<Episode>()
+
+        if (hqElements.isNotEmpty()) {
+            val seasonsMap = LinkedHashMap<Int, MutableList<Episode>>()
+            var autoSeasonCounter = 1
+
+            for (hq in hqElements) {
+                val hqText = hq.text().trim()
+                val extractedSeason = Regex("Season\\s*(\\d+)", RegexOption.IGNORE_CASE)
+                    .find(hqText)?.groupValues?.get(1)?.toIntOrNull()
+
+                val seasonNum = extractedSeason ?: autoSeasonCounter
+                if (extractedSeason != null) {
+                    autoSeasonCounter = maxOf(autoSeasonCounter, extractedSeason + 1)
+                } else {
+                    autoSeasonCounter++
+                }
+
+                val singleLink = hq.nextElementSibling()?.takeIf { it.hasClass("singlelink") }
+                    ?: hq.nextElementSiblings().firstOrNull { it.hasClass("singlelink") }
+
+                val links = singleLink?.select("ul.lcp_catlist li a") ?: emptyList()
+                val seasonEpisodes = links.mapNotNull { parseEpisode(it, seasonNum) }.reversed()
+
+                if (seasonEpisodes.isNotEmpty()) {
+                    seasonsMap.getOrPut(seasonNum) { mutableListOf() }.addAll(seasonEpisodes)
+                }
+            }
+
+            // Order seasons in descending order (latest season first) so CloudStream defaults to opening the latest season
+            val sortedSeasonKeys = seasonsMap.keys.sortedDescending()
+            for (sKey in sortedSeasonKeys) {
+                seasonsMap[sKey]?.let { episodes.addAll(it) }
+            }
+        }
+
+        if (episodes.isEmpty()) {
+            val episodesList = statusDoc.select("ul.lcp_catlist li a")
+            if (episodesList.isNotEmpty()) {
+                episodes.addAll(episodesList.mapNotNull { parseEpisode(it, 1) }.reversed())
+            } else {
+                val episodeNumber = rawTitle.replace(Regex(".*Episode\\s*(\\d+).*", RegexOption.IGNORE_CASE), "$1").toIntOrNull()
+                episodes.add(newEpisode(url) {
+                    this.data = url
+                    this.name = "Episode ${episodeNumber ?: 1}"
+                    this.episode = episodeNumber ?: 1
+                    this.season = 1
+                })
+            }
+        }
 
         return newAnimeLoadResponse(title, url, type) {
             engName = title
@@ -114,14 +160,33 @@ class Anoboy : MainAPI() {
         }
     }
 
-    private fun parseEpisode(element: Element): Episode {
+    private fun parseEpisode(element: Element, seasonNum: Int = 1): Episode? {
         val link = fixUrl(element.attr("href"))
         val titleText = element.text().trim()
-        val episodeNumber = titleText.replace(Regex(".*Episode\\s*(\\d+).*"), "$1").toIntOrNull()
+        if (titleText.contains("Download", ignoreCase = true)) {
+            return null
+        }
+
+        val episodeNumber = Regex("(?:Episode|Ep)\\s*(\\d+)", RegexOption.IGNORE_CASE)
+            .find(titleText)?.groupValues?.get(1)?.toIntOrNull()
+            ?: Regex("\\b(\\d+)\\b").find(titleText)?.groupValues?.get(1)?.toIntOrNull()
+
+        val nameText = when {
+            titleText.contains("OVA", ignoreCase = true) -> titleText
+            titleText.contains("Part", ignoreCase = true) -> {
+                val partMatch = Regex("(Part\\s*\\d+\\s*Episode\\s*\\d+)", RegexOption.IGNORE_CASE)
+                    .find(titleText)?.groupValues?.get(1)
+                partMatch ?: if (episodeNumber != null) "Part Episode $episodeNumber" else titleText
+            }
+            episodeNumber != null -> "Episode $episodeNumber"
+            else -> titleText
+        }
+
         return newEpisode(link) {
             this.data = link
-            this.name = "Episode ${episodeNumber ?: 0}"
+            this.name = nameText
             this.episode = episodeNumber
+            this.season = seasonNum
         }
     }
 
