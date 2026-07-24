@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.nicehttp.NiceResponse
-import com.lagradost.nicehttp.RequestBodyTypes
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.ByteString.Companion.decodeBase64
@@ -33,7 +32,6 @@ class Moviebox : MainAPI() {
         "https://api4.aoneroom.com",
         "https://api4sg.aoneroom.com",
         "https://api3.aoneroom.com",
-        "https://api6sg.aoneroom.com",
         "https://api.inmoviebox.com"
     )
     private var activeHostIdx = 0
@@ -137,16 +135,33 @@ class Moviebox : MainAPI() {
         return headers
     }
 
+    private suspend fun ensureAuthToken() {
+        if (authToken != null) return
+        try {
+            val host = hostPool[activeHostIdx]
+            val fullUrl = "$host/wefeed-mobile-bff/tab-operating?page=1&tabId=0&version="
+            val headers = getHeaders("GET", fullUrl, null)
+            val res = app.get(fullUrl, headers = headers)
+            res.headers["x-user"]?.let { xUser ->
+                val token = parseJson<Map<String, Any>>(xUser)["token"] as? String
+                if (!token.isNullOrEmpty()) {
+                    authToken = token
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
     private suspend fun makeApiRequest(method: String, pathAndQuery: String, bodyJson: String? = null): NiceResponse {
+        ensureAuthToken()
         val startIdx = activeHostIdx
         for (i in hostPool.indices) {
             val idx = (startIdx + i) % hostPool.size
             val host = hostPool[idx]
             val fullUrl = "$host$pathAndQuery"
-            val headers = getHeaders(method, fullUrl, bodyJson)
+            var headers = getHeaders(method, fullUrl, bodyJson)
 
             try {
-                val response = if (method.equals("POST", ignoreCase = true)) {
+                var response = if (method.equals("POST", ignoreCase = true)) {
                     val requestBody = (bodyJson ?: "").toRequestBody("application/json".toMediaTypeOrNull())
                     app.post(fullUrl, headers = headers, requestBody = requestBody)
                 } else {
@@ -160,6 +175,18 @@ class Moviebox : MainAPI() {
                             authToken = token
                         }
                     } catch (_: Exception) {}
+                }
+
+                if (response.code == 441 || response.text.contains("miss token", ignoreCase = true)) {
+                    authToken = null
+                    ensureAuthToken()
+                    headers = getHeaders(method, fullUrl, bodyJson)
+                    response = if (method.equals("POST", ignoreCase = true)) {
+                        val requestBody = (bodyJson ?: "").toRequestBody("application/json".toMediaTypeOrNull())
+                        app.post(fullUrl, headers = headers, requestBody = requestBody)
+                    } else {
+                        app.get(fullUrl, headers = headers)
+                    }
                 }
 
                 if (response.isSuccessful) {
@@ -190,10 +217,16 @@ class Moviebox : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val path = "/wefeed-mobile-bff/tab-operating?page=$page&tabId=${request.data}&version="
         val res = makeApiRequest("GET", path)
-        val items = res.parsedSafe<MediaData>()?.data?.let { data ->
-            data.subjectList ?: data.items
-        }?.mapNotNull { it.toSearchResponse(this) } ?: throw ErrorLoadingException("No Data Found")
-        return newHomePageResponse(request.name, items)
+        val dataObj = res.parsedSafe<MediaData>()?.data
+        val items = mutableListOf<SearchResponse>()
+        dataObj?.subjectList?.mapNotNullTo(items) { it.toSearchResponse(this) }
+        dataObj?.items?.forEach { item ->
+            item.toSearchResponse(this)?.let { items.add(it) }
+            item.subjects?.mapNotNullTo(items) { it.toSearchResponse(this) }
+            item.banner?.banners?.mapNotNullTo(items) { it.subject?.toSearchResponse(this) }
+        }
+        if (items.isEmpty()) throw ErrorLoadingException("No Data Found")
+        return newHomePageResponse(request.name, items.distinctBy { it.url })
     }
 
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
@@ -207,8 +240,13 @@ class Moviebox : MainAPI() {
             "tabId" to "All"
         ).toJson()
         val res = makeApiRequest("POST", "/wefeed-mobile-bff/subject-api/search/v2", body)
-        return res.parsedSafe<MediaData>()?.data?.items?.mapNotNull { it.toSearchResponse(this) }
-            ?: throw ErrorLoadingException()
+        val dataObj = res.parsedSafe<SearchDataContainer>()?.data
+        val items = mutableListOf<SearchResponse>()
+        dataObj?.results?.forEach { resItem ->
+            resItem.subjects?.mapNotNullTo(items) { it.toSearchResponse(this) }
+        }
+        dataObj?.items?.mapNotNullTo(items) { it.toSearchResponse(this) }
+        return items.distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -320,7 +358,7 @@ class Moviebox : MainAPI() {
             if (firstResourceId == null) {
                 firstResourceId = item.id ?: item.resourceId
             }
-            val qualityStr = item.resolution ?: item.quality ?: "720"
+            val qualityStr = item.resolution?.toString() ?: item.quality ?: "720"
             callback(newExtractorLink(this.name, this.name, link, INFER_TYPE) {
                 this.quality = getQualityFromName(qualityStr)
             })
@@ -344,6 +382,18 @@ class Moviebox : MainAPI() {
     }
 
     data class LoadData(val id: String? = null, val season: Int? = null, val episode: Int? = null)
+
+    data class SearchDataContainer(
+        @JsonProperty("data") val data: SearchResultContent? = null
+    ) {
+        data class SearchResultContent(
+            @JsonProperty("results") val results: List<SearchResultGroup>? = null,
+            @JsonProperty("items") val items: List<Items>? = null
+        )
+        data class SearchResultGroup(
+            @JsonProperty("subjects") val subjects: List<Items>? = null
+        )
+    }
 
     data class MediaData(@JsonProperty("data") val data: DataContent? = null) {
         data class DataContent(
@@ -378,7 +428,7 @@ class Moviebox : MainAPI() {
         @JsonProperty("resourceId") val resourceId: String? = null,
         @JsonProperty("resourceLink") val resourceLink: String? = null,
         @JsonProperty("url") val url: String? = null,
-        @JsonProperty("resolution") val resolution: String? = null,
+        @JsonProperty("resolution") val resolution: Any? = null,
         @JsonProperty("quality") val quality: String? = null
     )
 
@@ -396,6 +446,7 @@ class Moviebox : MainAPI() {
 
     data class Items(
         @JsonProperty("subjectId") val subjectId: String? = null,
+        @JsonProperty("id") val id: String? = null,
         @JsonProperty("subjectType") val subjectType: Int? = null,
         @JsonProperty("stype") val stype: Int? = null,
         @JsonProperty("title") val title: String? = null,
@@ -408,12 +459,15 @@ class Moviebox : MainAPI() {
         @JsonProperty("trailer") val trailer: Trailer? = null,
         @JsonProperty("subject") val subject: Items? = null,
         @JsonProperty("item") val item: Items? = null,
+        @JsonProperty("subjects") val subjects: List<Items>? = null,
+        @JsonProperty("banner") val banner: BannerContainer? = null,
         @JsonProperty("stars") val stars: List<Stars>? = null,
         @JsonProperty("resource") val resource: ResourceContainer? = null
     ) {
         fun toSearchResponse(provider: Moviebox): SearchResponse? {
-            val sid = subjectId ?: return null
+            val sid = subjectId ?: id ?: return null
             val t = title ?: ""
+            if (t.isEmpty()) return null
             val type = if ((subjectType ?: stype ?: 1) == 2) TvType.TvSeries else TvType.Movie
             val poster = cover?.url ?: coverUrl
             return provider.newMovieSearchResponse(t, sid, type, false) {
@@ -424,6 +478,9 @@ class Moviebox : MainAPI() {
         data class Cover(@JsonProperty("url") val url: String? = null)
         data class Trailer(@JsonProperty("videoAddress") val videoAddress: VideoAddress? = null) {
             data class VideoAddress(@JsonProperty("url") val url: String? = null)
+        }
+        data class BannerContainer(@JsonProperty("banners") val banners: List<BannerItem>? = null) {
+            data class BannerItem(@JsonProperty("subject") val subject: Items? = null)
         }
         data class Stars(@JsonProperty("name") val name: String? = null, @JsonProperty("character") val character: String? = null, @JsonProperty("avatarUrl") val avatarUrl: String? = null)
         data class ResourceContainer(@JsonProperty("seasons") val seasons: List<Seasons>? = null)
