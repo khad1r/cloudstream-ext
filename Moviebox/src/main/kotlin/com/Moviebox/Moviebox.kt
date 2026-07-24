@@ -271,7 +271,7 @@ class Moviebox : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val id = url.substringAfterLast("/")
+        val id = url.substringAfterLast("/").substringAfter("id=")
         val res = makeApiRequest("GET", "/wefeed-mobile-bff/subject-api/get?subjectId=$id")
         val doc = res.parsedSafe<MediaDetailData>()?.data
         val subject = doc?.subject ?: doc?.item ?: doc
@@ -352,24 +352,19 @@ class Moviebox : MainAPI() {
         val season = media.season ?: 0
         val episode = media.episode ?: 0
 
-        val resolutions = listOf("1080", "720", "480", "360", "")
-        val resourceLinks = mutableListOf<ResourceItem>()
-
-        for (res in resolutions) {
-            val resParam = if (res.isNotEmpty()) "&resolution=$res" else ""
-            val path = if (season == 0 && episode == 0) {
-                "/wefeed-mobile-bff/subject-api/resource?subjectId=$id&page=1&perPage=20$resParam"
-            } else {
-                "/wefeed-mobile-bff/subject-api/resource?subjectId=$id&se=$season&ep=$episode&page=1&perPage=20$resParam"
-            }
-
-            try {
-                val response = makeApiRequest("GET", path)
-                val items = response.parsedSafe<ResourceData>()?.data?.list
-                    ?: response.parsedSafe<ResourceData>()?.list
-                items?.let { resourceLinks.addAll(it) }
-            } catch (_: Exception) {}
+        val path = if (season == 0 && episode == 0) {
+            "/wefeed-mobile-bff/subject-api/resource?subjectId=$id&page=1&perPage=20"
+        } else {
+            "/wefeed-mobile-bff/subject-api/resource?subjectId=$id&se=$season&ep=$episode&page=1&perPage=20"
         }
+
+        val resourceLinks = mutableListOf<ResourceItem>()
+        try {
+            val response = makeApiRequest("GET", path)
+            val items = response.parsedSafe<ResourceData>()?.data?.list
+                ?: response.parsedSafe<ResourceData>()?.list
+            items?.let { resourceLinks.addAll(it) }
+        } catch (_: Exception) {}
 
         val uniqueStreams = resourceLinks.distinctBy { it.resourceLink ?: it.url }
         var firstResourceId: String? = null
@@ -491,7 +486,8 @@ class Moviebox : MainAPI() {
             if (t.isEmpty()) return null
             val type = if ((subjectType ?: stype ?: 1) == 2) TvType.TvSeries else TvType.Movie
             val poster = cover?.url ?: coverUrl
-            return provider.newMovieSearchResponse(t, sid, type, false) {
+            val itemUrl = "${provider.mainUrl}/detail/$sid"
+            return provider.newMovieSearchResponse(t, itemUrl, type, false) {
                 this.posterUrl = poster
             }
         }
