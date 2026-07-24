@@ -135,28 +135,30 @@ class Moviebox : MainAPI() {
         return headers
     }
 
-    private suspend fun ensureAuthToken() {
-        if (authToken != null) return
-        try {
-            val host = hostPool[activeHostIdx]
+    private suspend fun fetchTokenForHost(host: String): String? {
+        return try {
             val fullUrl = "$host/wefeed-mobile-bff/tab-operating?page=1&tabId=0&version="
             val headers = getHeaders("GET", fullUrl, null)
             val res = app.get(fullUrl, headers = headers)
             res.headers["x-user"]?.let { xUser ->
-                val token = parseJson<Map<String, Any>>(xUser)["token"] as? String
-                if (!token.isNullOrEmpty()) {
-                    authToken = token
-                }
+                parseJson<Map<String, Any>>(xUser)["token"] as? String
             }
-        } catch (_: Exception) {}
+        } catch (_: Exception) { null }
     }
 
     private suspend fun makeApiRequest(method: String, pathAndQuery: String, bodyJson: String? = null): NiceResponse {
-        ensureAuthToken()
         val startIdx = activeHostIdx
         for (i in hostPool.indices) {
             val idx = (startIdx + i) % hostPool.size
             val host = hostPool[idx]
+
+            if (authToken.isNullOrEmpty()) {
+                val newToken = fetchTokenForHost(host)
+                if (!newToken.isNullOrEmpty()) {
+                    authToken = newToken
+                }
+            }
+
             val fullUrl = "$host$pathAndQuery"
             var headers = getHeaders(method, fullUrl, bodyJson)
 
@@ -178,18 +180,20 @@ class Moviebox : MainAPI() {
                 }
 
                 if (response.code == 441 || response.text.contains("miss token", ignoreCase = true)) {
-                    authToken = null
-                    ensureAuthToken()
-                    headers = getHeaders(method, fullUrl, bodyJson)
-                    response = if (method.equals("POST", ignoreCase = true)) {
-                        val requestBody = (bodyJson ?: "").toRequestBody("application/json".toMediaTypeOrNull())
-                        app.post(fullUrl, headers = headers, requestBody = requestBody)
-                    } else {
-                        app.get(fullUrl, headers = headers)
+                    val newToken = fetchTokenForHost(host)
+                    if (!newToken.isNullOrEmpty()) {
+                        authToken = newToken
+                        headers = getHeaders(method, fullUrl, bodyJson)
+                        response = if (method.equals("POST", ignoreCase = true)) {
+                            val requestBody = (bodyJson ?: "").toRequestBody("application/json".toMediaTypeOrNull())
+                            app.post(fullUrl, headers = headers, requestBody = requestBody)
+                        } else {
+                            app.get(fullUrl, headers = headers)
+                        }
                     }
                 }
 
-                if (response.isSuccessful) {
+                if (response.isSuccessful && !response.text.contains("miss token", ignoreCase = true)) {
                     activeHostIdx = idx
                     return response
                 }
