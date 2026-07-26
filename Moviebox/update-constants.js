@@ -3,12 +3,13 @@ const path = require('path');
 const crypto = require('crypto');
 
 const defaultSecretKey = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O";
-const hostPool = [
+const defaultHostPool = [
     "https://api6.aoneroom.com",
     "https://api5.aoneroom.com",
     "https://api4.aoneroom.com",
     "https://api4sg.aoneroom.com",
     "https://api3.aoneroom.com",
+    "https://api6sg.aoneroom.com",
     "https://api.inmoviebox.com"
 ];
 
@@ -27,6 +28,29 @@ async function fetchLatestSecretKey() {
         console.warn(`Failed to fetch upstream secret key: ${e.message}. Using default fallback.`);
     }
     return defaultSecretKey;
+}
+
+async function fetchLatestHostPool() {
+    try {
+        console.log("Fetching latest host pool from MovieBox-Tui repository...");
+        const res = await fetch("https://raw.githubusercontent.com/mesamirh/MovieBox-Tui/main/src/providers/moviebox/client.rs");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const text = await res.text();
+        const match = text.match(/const\s+HOST_POOL:\s*&\[&str\]\s*=\s*&\[([\s\S]*?)\];/);
+        if (match && match[1]) {
+            const hosts = match[1]
+                .split('\n')
+                .map(line => line.trim().replace(/^"|",?$|^r#"/g, '').replace(/"/g, ''))
+                .filter(s => s.startsWith("http"));
+            if (hosts.length > 0) {
+                console.log(`Extracted ${hosts.length} hosts from upstream client.rs:`, hosts);
+                return hosts;
+            }
+        }
+    } catch (e) {
+        console.warn(`Failed to fetch upstream host pool: ${e.message}. Using fallback host pool.`);
+    }
+    return defaultHostPool;
 }
 
 function generateSignature(method, fullUrl, secretKeyB64, ts) {
@@ -96,6 +120,7 @@ async function checkHost(url, secretKey) {
 
 async function updateMovieboxConstants() {
     const secretKey = await fetchLatestSecretKey();
+    const hostPool = await fetchLatestHostPool();
     const activeHosts = [];
 
     for (const host of hostPool) {
@@ -123,8 +148,15 @@ async function updateMovieboxConstants() {
             /(private\s+var\s+secretKey\s*=\s*")[^"]+(")/,
             `$1${secretKey}$2`
         );
+        const kotlinHostPoolStr = `private val hostPool = listOf(\n` +
+            activeHosts.map(h => `        "${h}"`).join(',\n') +
+            `\n    )`;
+        content = content.replace(
+            /private\s+val\s+hostPool\s*=\s*listOf\([\s\S]*?\)/,
+            kotlinHostPoolStr
+        );
         fs.writeFileSync(movieboxPath, content, 'utf8');
-        console.log(`Updated Moviebox.kt mainUrl: ${primaryHost}, secretKey: ${secretKey}`);
+        console.log(`Updated Moviebox.kt mainUrl: ${primaryHost}, secretKey: ${secretKey}, hostPool: ${activeHosts.length} hosts`);
     } else {
         console.warn(`Moviebox.kt not found at: ${movieboxPath}`);
     }

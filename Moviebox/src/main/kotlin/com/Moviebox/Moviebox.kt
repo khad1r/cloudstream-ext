@@ -393,16 +393,33 @@ class Moviebox : MainAPI() {
             })
         }
 
-        firstResourceId?.let { resId ->
+        val fetchedSubUrls = mutableSetOf<String>()
+
+        // 1. Process embedded captions in resource links if present
+        resourceLinks.forEach { item ->
+            item.getEmbeddedCaptions().forEach { cap ->
+                val name = cap.lanName ?: cap.language ?: cap.name ?: cap.lan ?: cap.lang ?: "Subtitle"
+                val subUrl = cap.url ?: cap.link ?: cap.subUrl ?: cap.src ?: return@forEach
+                if (subUrl.isNotBlank() && fetchedSubUrls.add(subUrl)) {
+                    subtitleCallback(newSubtitleFile(name, subUrl))
+                }
+            }
+        }
+
+        // 2. External captions fetch for resource IDs
+        val resourceIds = (listOfNotNull(firstResourceId) + resourceLinks.mapNotNull { it.id ?: it.resourceId }).distinct()
+        for (resId in resourceIds) {
             try {
                 val capPath = "/wefeed-mobile-bff/subject-api/get-ext-captions?subjectId=$id&resourceId=$resId"
                 val capRes = makeApiRequest("GET", capPath)
-                val captions = capRes.parsedSafe<CaptionData>()?.data
+                val captions = capRes.parsedSafe<CaptionData>()?.getItems()
                     ?: capRes.parsedSafe<List<CaptionItem>>()
                 captions?.forEach { cap ->
-                    val name = cap.lanName ?: cap.language ?: cap.lan ?: "Subtitle"
-                    val subUrl = cap.url ?: cap.link ?: return@forEach
-                    subtitleCallback(newSubtitleFile(name, subUrl))
+                    val name = cap.lanName ?: cap.language ?: cap.name ?: cap.lan ?: cap.lang ?: "Subtitle"
+                    val subUrl = cap.url ?: cap.link ?: cap.subUrl ?: cap.src ?: return@forEach
+                    if (subUrl.isNotBlank() && fetchedSubUrls.add(subUrl)) {
+                        subtitleCallback(newSubtitleFile(name, subUrl))
+                    }
                 }
             } catch (_: Exception) {}
         }
@@ -458,19 +475,42 @@ class Moviebox : MainAPI() {
         @JsonProperty("resourceLink") val resourceLink: String? = null,
         @JsonProperty("url") val url: String? = null,
         @JsonProperty("resolution") val resolution: Any? = null,
-        @JsonProperty("quality") val quality: String? = null
-    )
+        @JsonProperty("quality") val quality: String? = null,
+        @JsonProperty("captionList") val captionList: List<CaptionItem>? = null,
+        @JsonProperty("captions") val captions: List<CaptionItem>? = null,
+        @JsonProperty("subtitles") val subtitles: List<CaptionItem>? = null,
+        @JsonProperty("extCaptions") val extCaptions: List<CaptionItem>? = null
+    ) {
+        fun getEmbeddedCaptions(): List<CaptionItem> {
+            return (captionList ?: captions ?: subtitles ?: extCaptions ?: emptyList())
+        }
+    }
 
     data class CaptionData(
-        @JsonProperty("data") val data: List<CaptionItem>? = null
-    )
+        @JsonProperty("data") val data: CaptionContent? = null,
+        @JsonProperty("list") val list: List<CaptionItem>? = null
+    ) {
+        data class CaptionContent(
+            @JsonProperty("extCaptions") val extCaptions: List<CaptionItem>? = null,
+            @JsonProperty("captions") val captions: List<CaptionItem>? = null,
+            @JsonProperty("captionList") val captionList: List<CaptionItem>? = null,
+            @JsonProperty("list") val list: List<CaptionItem>? = null
+        )
+
+        fun getItems(): List<CaptionItem>? =
+            data?.extCaptions ?: data?.captions ?: data?.captionList ?: data?.list ?: list
+    }
 
     data class CaptionItem(
         @JsonProperty("lanName") val lanName: String? = null,
         @JsonProperty("language") val language: String? = null,
         @JsonProperty("lan") val lan: String? = null,
+        @JsonProperty("lang") val lang: String? = null,
+        @JsonProperty("name") val name: String? = null,
         @JsonProperty("url") val url: String? = null,
-        @JsonProperty("link") val link: String? = null
+        @JsonProperty("link") val link: String? = null,
+        @JsonProperty("subUrl") val subUrl: String? = null,
+        @JsonProperty("src") val src: String? = null
     )
 
     data class Items(
