@@ -102,6 +102,20 @@ async function updateConstants() {
     } else {
         console.warn(`Extractor.kt not found at: ${extractorPath}`);
     }
+
+    // 3. Update build.gradle.kts iconUrl
+    const gradlePath = path.join(__dirname, 'build.gradle.kts');
+    if (fs.existsSync(gradlePath)) {
+        let content = fs.readFileSync(gradlePath, 'utf8');
+        const hostname = new URL(anoboyDomain).hostname;
+        const iconUrl = `https://www.google.com/s2/favicons?domain=${hostname}&sz=%size%`;
+        content = content.replace(
+            /(iconUrl\s*=\s*")[^"]+(")/,
+            `$1${iconUrl}$2`
+        );
+        fs.writeFileSync(gradlePath, content, 'utf8');
+        console.log(`Updated build.gradle.kts with iconUrl: ${iconUrl}`);
+    }
 }
 
 updateConstants();
