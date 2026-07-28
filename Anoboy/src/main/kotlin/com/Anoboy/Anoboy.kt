@@ -52,10 +52,23 @@ class Anoboy : MainAPI() {
         "Upgrade-Insecure-Requests" to "1"
     )
 
-    private val cfInterceptor = CloudflareInterceptor()
+    private val cfSolver = CloudflareSolver()
+
+    // Resolves the Cloudflare cookie proactively (before the request) rather than reacting
+    // to a 403 inside an OkHttp interceptor. See CloudflareSolver for why that matters.
+    private suspend fun fetchDoc(url: String): org.jsoup.nodes.Document {
+        val cookie = cfSolver.getCookie(url)
+        val reqHeaders = cookie?.let { headers + ("Cookie" to it) } ?: headers
+        val response = app.get(url, headers = reqHeaders)
+
+        if (response.code != 403 && response.code != 503) return response.document
+
+        val freshCookie = cfSolver.getCookie(url, forceRefresh = true) ?: return response.document
+        return app.get(url, headers = headers + ("Cookie" to freshCookie)).document
+    }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get("$mainUrl/${request.data.format(page)}", headers = headers, interceptor = cfInterceptor).document
+        val document = fetchDoc("$mainUrl/${request.data.format(page)}")
         val items = document.select("a[rel=bookmark]:has(div.amv)").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, items)
     }
@@ -72,14 +85,14 @@ class Anoboy : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/?s=$query", headers = headers, interceptor = cfInterceptor).document
+        val document = fetchDoc("$mainUrl/?s=$query")
         return document.select("a[rel=bookmark]:has(div.amv)").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val document = app.get(url, headers = headers, interceptor = cfInterceptor).document
+        val document = fetchDoc(url)
         val mainSeriesUrl = document.selectFirst("th:contains(Semua Episode) + td a")?.attr("href")
-        val mainDoc = if (mainSeriesUrl != null) app.get(fixUrl(mainSeriesUrl), headers = headers, interceptor = cfInterceptor).document else null
+        val mainDoc = if (mainSeriesUrl != null) fetchDoc(fixUrl(mainSeriesUrl)) else null
         val statusDoc = mainDoc ?: document
 
         val rawTitle = statusDoc.selectFirst("div.pagetitle h1")?.text()
@@ -209,7 +222,7 @@ class Anoboy : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data, headers = headers, interceptor = cfInterceptor).document
+        val document = fetchDoc(data)
 
         // 1. Load Gofile links
         val gofileUrls = document.select("a[href*='gofile.io']").mapNotNull { it.attr("href") }.distinct()

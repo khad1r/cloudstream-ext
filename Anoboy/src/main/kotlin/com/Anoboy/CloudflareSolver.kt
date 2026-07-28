@@ -12,50 +12,60 @@ import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
-import okhttp3.Interceptor
-import okhttp3.Response
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
+// Resolves a Cloudflare cf_clearance cookie for a host, proactively and off the OkHttp
+// call path. Solving used to live inside an okhttp Interceptor, but that meant every one
+// of the main page's parallel section requests raced for the same lock *inside* its own
+// OkHttp call, and requests that lost the race got cancelled by their own per-call timeout
+// before the winner ever finished solving. A coroutine Mutex has no such timeout: losers
+// just suspend until the winner is done, then read the now-populated cache.
 @SuppressLint("SetJavaScriptEnabled")
-class CloudflareInterceptor : Interceptor {
+class CloudflareSolver {
+    private val mutex = Mutex()
     private var cachedCookie: String? = null
     private var cachedHost: String? = null
     private var cachedAt = 0L
 
-    override fun intercept(chain: Interceptor.Chain): Response {
-        val request = chain.request()
-        val response = chain.proceed(request)
+    suspend fun getCookie(url: String, forceRefresh: Boolean = false): String? {
+        val host = url.toHttpUrl().host
 
-        if (response.code != 403 && response.code != 503) return response
-        response.close()
+        if (!forceRefresh) {
+            validCachedCookie(host)?.let { return it }
+        }
 
-        val ctx = currentApplicationContext() ?: return chain.proceed(request)
-        val host = request.url.host
+        return mutex.withLock {
+            // Another coroutine may have solved it while we were waiting for the lock.
+            if (!forceRefresh) {
+                validCachedCookie(host)?.let { return@withLock it }
+            }
 
-        val cookie = getOrSolveCookie(ctx, host, request.url.toString()) ?: return chain.proceed(request)
+            val ctx = currentApplicationContext() ?: return@withLock null
+            toast(ctx, "Anoboy: bypassing Cloudflare…")
 
-        val newRequest = request.newBuilder().header("Cookie", cookie).build()
-        return chain.proceed(newRequest)
+            val solved = withContext(Dispatchers.IO) {
+                solveSilently(ctx, url) ?: solveInteractively(ctx, url)
+            }
+
+            toast(ctx, if (solved != null) "Anoboy: Cloudflare bypass succeeded" else "Anoboy: Cloudflare bypass failed")
+
+            if (solved != null) {
+                cachedCookie = solved
+                cachedHost = host
+                cachedAt = System.currentTimeMillis()
+            }
+            solved
+        }
     }
 
-    // Synchronized so concurrent requests (e.g. the main page's parallel section loads)
-    // wait for a single in-flight solve instead of each opening their own WebView/dialog.
-    @Synchronized
-    private fun getOrSolveCookie(ctx: Context, host: String, url: String): String? {
-        cachedCookie.takeIf { host == cachedHost && System.currentTimeMillis() - cachedAt < 15 * 60_000 }
-            ?.let { return it }
-
-        toast(ctx, "Anoboy: bypassing Cloudflare…")
-        val solved = solveSilently(ctx, url) ?: solveInteractively(ctx, url)
-        toast(ctx, if (solved != null) "Anoboy: Cloudflare bypass succeeded" else "Anoboy: Cloudflare bypass failed")
-
-        if (solved != null) {
-            cachedCookie = solved
-            cachedHost = host
-            cachedAt = System.currentTimeMillis()
-        }
-        return solved
+    private fun validCachedCookie(host: String): String? {
+        return cachedCookie.takeIf { host == cachedHost && System.currentTimeMillis() - cachedAt < 15 * 60_000 }
     }
 
     // Silent JS challenge: hidden WebView, no user interaction.
