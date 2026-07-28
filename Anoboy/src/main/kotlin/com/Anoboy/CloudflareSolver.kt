@@ -52,13 +52,21 @@ class CloudflareSolver {
             }
 
             val ctx = currentApplicationContext() ?: return@withLock null
-            toast(ctx, "Anoboy: bypassing Cloudflare…")
+
+            // cf_clearance is stored in the shared CookieManager, so once one page has cleared
+            // the challenge for this host, later pages already carry it and load near-instantly.
+            // Only announce the bypass when we're not already cleared, so this isn't a toast on
+            // every single page fetch.
+            val alreadyCleared = CookieManager.getInstance().getCookie(url)?.contains("cf_clearance") == true
+            if (!alreadyCleared) toast(ctx, "Anoboy: bypassing Cloudflare…")
 
             val html = withContext(Dispatchers.IO) {
                 solveSilently(ctx, url) ?: solveInteractively(ctx, url)
             }
 
-            toast(ctx, if (html != null) "Anoboy: Cloudflare bypass succeeded" else "Anoboy: Cloudflare bypass failed")
+            if (!alreadyCleared) {
+                toast(ctx, if (html != null) "Anoboy: Cloudflare bypass succeeded" else "Anoboy: Cloudflare bypass failed")
+            }
 
             if (html != null) {
                 cachedHtml = html
@@ -86,6 +94,7 @@ class CloudflareSolver {
                 val cookies = CookieManager.getInstance().getCookie(url)
                 if (webView != null && cookies != null && cookies.contains("cf_clearance")) {
                     extractHtml(webView) { html ->
+                        android.util.Log.d("AnoboyDebug", "solveSilently extractHtml htmlLen=${html?.length ?: -1}")
                         result = html
                         latch.countDown()
                     }
@@ -106,6 +115,7 @@ class CloudflareSolver {
         }
 
         latch.await(15, TimeUnit.SECONDS)
+        android.util.Log.d("AnoboyDebug", "solveSilently timed out, count=${latch.count}")
         handler.removeCallbacks(poller)
 
         handler.post {

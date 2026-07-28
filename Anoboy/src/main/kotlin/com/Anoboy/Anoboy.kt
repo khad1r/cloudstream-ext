@@ -68,15 +68,21 @@ class Anoboy : MainAPI() {
     // returned interstitial content in practice.
     private suspend fun fetchDoc(url: String): org.jsoup.nodes.Document {
         val response = app.get(url, headers = headers)
-        if (!isChallengePage(response.code, response.text)) return response.document
+        val blocked = isChallengePage(response.code, response.text)
+        android.util.Log.d("AnoboyDebug", "fetchDoc code=${response.code} blocked=$blocked bodyLen=${response.text.length} url=$url")
+        if (!blocked) return response.document
 
-        val html = cfSolver.fetchHtml(url) ?: return response.document
+        val html = cfSolver.fetchHtml(url)
+        android.util.Log.d("AnoboyDebug", "fetchDoc cfSolver htmlLen=${html?.length ?: -1} url=$url")
+        if (html == null) return response.document
         return org.jsoup.Jsoup.parse(html, url)
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = fetchDoc("$mainUrl/${request.data.format(page)}")
-        val items = document.select("a[rel=bookmark]:has(div.amv)").mapNotNull { it.toSearchResult() }
+        val rawMatches = document.select("a[rel=bookmark]:has(div.amv)")
+        val items = rawMatches.mapNotNull { it.toSearchResult() }
+        android.util.Log.d("AnoboyDebug", "getMainPage ${request.name} rawMatches=${rawMatches.size} items=${items.size} title=${document.title()}")
         return newHomePageResponse(request.name, items)
     }
 
