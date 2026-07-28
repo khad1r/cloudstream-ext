@@ -59,32 +59,40 @@ class CloudflareInterceptor : Interceptor {
     }
 
     // Silent JS challenge: hidden WebView, no user interaction.
+    // Cookie is polled continuously rather than only checked in onPageFinished, since
+    // Cloudflare can set cf_clearance via a background reload/XHR after that event fires.
     private fun solveSilently(ctx: Context, url: String): String? {
         val latch = CountDownLatch(1)
         var result: String? = null
         var webViewRef: WebView? = null
+        val handler = Handler(Looper.getMainLooper())
 
-        Handler(Looper.getMainLooper()).post {
+        val poller = object : Runnable {
+            override fun run() {
+                val cookies = CookieManager.getInstance().getCookie(url)
+                if (cookies != null && cookies.contains("cf_clearance")) {
+                    result = cookies
+                    latch.countDown()
+                } else if (latch.count > 0) {
+                    handler.postDelayed(this, 500)
+                }
+            }
+        }
+
+        handler.post {
             val webView = WebView(ctx)
             webViewRef = webView
             webView.settings.javaScriptEnabled = true
             webView.settings.domStorageEnabled = true
-            webView.webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView?, loadedUrl: String?) {
-                    super.onPageFinished(view, loadedUrl)
-                    val cookies = CookieManager.getInstance().getCookie(url)
-                    if (cookies != null && cookies.contains("cf_clearance")) {
-                        result = cookies
-                        latch.countDown()
-                    }
-                }
-            }
+            webView.webViewClient = WebViewClient()
             webView.loadUrl(url)
+            handler.postDelayed(poller, 500)
         }
 
         latch.await(12, TimeUnit.SECONDS)
+        handler.removeCallbacks(poller)
 
-        Handler(Looper.getMainLooper()).post {
+        handler.post {
             webViewRef?.stopLoading()
             webViewRef?.destroy()
         }
@@ -99,13 +107,27 @@ class CloudflareInterceptor : Interceptor {
         val latch = CountDownLatch(1)
         var result: String? = null
         var dialogRef: Dialog? = null
+        val handler = Handler(Looper.getMainLooper())
 
         toast(ctx, "Anoboy: please complete the verification shown")
 
-        Handler(Looper.getMainLooper()).post {
+        val poller = object : Runnable {
+            override fun run() {
+                val cookies = CookieManager.getInstance().getCookie(url)
+                if (cookies != null && cookies.contains("cf_clearance")) {
+                    result = cookies
+                    dialogRef?.dismiss()
+                } else if (latch.count > 0) {
+                    handler.postDelayed(this, 500)
+                }
+            }
+        }
+
+        handler.post {
             val webView = WebView(activity)
             webView.settings.javaScriptEnabled = true
             webView.settings.domStorageEnabled = true
+            webView.webViewClient = WebViewClient()
 
             val dialog = Dialog(activity)
             dialogRef = dialog
@@ -121,25 +143,16 @@ class CloudflareInterceptor : Interceptor {
                 latch.countDown()
             }
 
-            webView.webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView?, loadedUrl: String?) {
-                    super.onPageFinished(view, loadedUrl)
-                    val cookies = CookieManager.getInstance().getCookie(url)
-                    if (cookies != null && cookies.contains("cf_clearance")) {
-                        result = cookies
-                        dialog.dismiss()
-                    }
-                }
-            }
-
             webView.loadUrl(url)
             dialog.show()
             dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            handler.postDelayed(poller, 500)
         }
 
         latch.await(3, TimeUnit.MINUTES)
+        handler.removeCallbacks(poller)
 
-        Handler(Looper.getMainLooper()).post {
+        handler.post {
             dialogRef?.takeIf { it.isShowing }?.dismiss()
         }
 
