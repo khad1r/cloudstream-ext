@@ -33,22 +33,29 @@ class CloudflareInterceptor : Interceptor {
         val ctx = currentApplicationContext() ?: return chain.proceed(request)
         val host = request.url.host
 
-        val cookie = cachedCookie.takeIf { host == cachedHost && System.currentTimeMillis() - cachedAt < 15 * 60_000 }
-            ?: run {
-                val url = request.url.toString()
-                toast(ctx, "Anoboy: bypassing Cloudflare…")
-                val solved = solveSilently(ctx, url) ?: solveInteractively(ctx, url)
-                toast(ctx, if (solved != null) "Anoboy: Cloudflare bypass succeeded" else "Anoboy: Cloudflare bypass failed")
-                solved?.also {
-                    cachedCookie = it
-                    cachedHost = host
-                    cachedAt = System.currentTimeMillis()
-                }
-            }
-            ?: return chain.proceed(request)
+        val cookie = getOrSolveCookie(ctx, host, request.url.toString()) ?: return chain.proceed(request)
 
         val newRequest = request.newBuilder().header("Cookie", cookie).build()
         return chain.proceed(newRequest)
+    }
+
+    // Synchronized so concurrent requests (e.g. the main page's parallel section loads)
+    // wait for a single in-flight solve instead of each opening their own WebView/dialog.
+    @Synchronized
+    private fun getOrSolveCookie(ctx: Context, host: String, url: String): String? {
+        cachedCookie.takeIf { host == cachedHost && System.currentTimeMillis() - cachedAt < 15 * 60_000 }
+            ?.let { return it }
+
+        toast(ctx, "Anoboy: bypassing Cloudflare…")
+        val solved = solveSilently(ctx, url) ?: solveInteractively(ctx, url)
+        toast(ctx, if (solved != null) "Anoboy: Cloudflare bypass succeeded" else "Anoboy: Cloudflare bypass failed")
+
+        if (solved != null) {
+            cachedCookie = solved
+            cachedHost = host
+            cachedAt = System.currentTimeMillis()
+        }
+        return solved
     }
 
     // Silent JS challenge: hidden WebView, no user interaction.
