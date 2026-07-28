@@ -45,6 +45,16 @@ class CloudflareSolver {
     private var cachedUrl: String? = null
     private var cachedAt = 0L
 
+    // Cloudflare clearance is per-host, not per-page, but the HTML cache above is keyed per
+    // exact URL (content differs per page). Without this, every distinct URL on the main page
+    // (8 different section URLs) would independently hit the interactive Turnstile dialog, even
+    // though solving it once for the host should cover all of them. Once any URL on a host comes
+    // back with real (non-challenge) content, that host is trusted for a while, and later URLs on
+    // it only get a quiet silent-WebView fetch — never another interactive prompt during that window.
+    private var clearedHost: String? = null
+    private var clearedAt = 0L
+    private val hostClearedTtlMs = 15 * 60_000L
+
     suspend fun fetchHtml(url: String, forceRefresh: Boolean = false): String? {
         if (!forceRefresh) {
             validCached(url)?.let { return it }
@@ -57,19 +67,19 @@ class CloudflareSolver {
             }
 
             val ctx = currentApplicationContext() ?: return@withLock null
+            val host = android.net.Uri.parse(url).host
+            val hostRecentlyCleared = host != null && host == clearedHost &&
+                System.currentTimeMillis() - clearedAt < hostClearedTtlMs
 
-            // cf_clearance is stored in the shared CookieManager, so once one page has cleared
-            // the challenge for this host, later pages already carry it and load near-instantly.
-            // Only announce the bypass when we're not already cleared, so this isn't a toast on
-            // every single page fetch.
-            val alreadyCleared = CookieManager.getInstance().getCookie(url)?.contains("cf_clearance") == true
-            if (!alreadyCleared) toast(ctx, "Anoboy: bypassing Cloudflare…")
+            if (!hostRecentlyCleared) toast(ctx, "Anoboy: bypassing Cloudflare…")
 
             val html = withContext(Dispatchers.IO) {
-                solveSilently(ctx, url) ?: solveInteractively(ctx, url)
+                // If this host was already proven clear, don't re-prompt the user with another
+                // interactive challenge for a different page — just accept a quiet silent-only miss.
+                solveSilently(ctx, url) ?: if (hostRecentlyCleared) null else solveInteractively(ctx, url)
             }
 
-            if (!alreadyCleared) {
+            if (!hostRecentlyCleared) {
                 toast(ctx, if (html != null) "Anoboy: Cloudflare bypass succeeded" else "Anoboy: Cloudflare bypass failed")
             }
 
@@ -77,6 +87,10 @@ class CloudflareSolver {
                 cachedHtml = html
                 cachedUrl = url
                 cachedAt = System.currentTimeMillis()
+                if (host != null) {
+                    clearedHost = host
+                    clearedAt = System.currentTimeMillis()
+                }
             }
             html
         }
@@ -130,6 +144,10 @@ class CloudflareSolver {
             webView.settings.domStorageEnabled = true
             // Default WebView UA can read as automation to Cloudflare; present a normal browser UA.
             webView.settings.userAgentString = DESKTOP_USER_AGENT
+            // Turnstile runs in a challenges.cloudflare.com iframe; without third-party cookies
+            // it can never persist its own verification state back, so it just keeps resetting.
+            CookieManager.getInstance().setAcceptCookie(true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
             webView.webViewClient = WebViewClient()
             webView.loadUrl(url)
             handler.postDelayed(poller, 800)
@@ -188,6 +206,8 @@ class CloudflareSolver {
             webView.settings.javaScriptEnabled = true
             webView.settings.domStorageEnabled = true
             webView.settings.userAgentString = DESKTOP_USER_AGENT
+            CookieManager.getInstance().setAcceptCookie(true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
             webView.webViewClient = WebViewClient()
 
             val dialog = Dialog(activity)

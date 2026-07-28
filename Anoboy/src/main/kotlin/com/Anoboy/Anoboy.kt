@@ -32,13 +32,13 @@ class Anoboy : MainAPI() {
 
     override val mainPage = mainPageOf(
         "page/%d/" to "Latest Release",
-        "anime/ongoing/page/%d/" to "Ongoing Anime",
-        "anime-movie/page/%d/" to "Movie",
-        "live-action-movie/page/%d/" to "Live-Action",
-        "tokusatsu/page/%d/" to "Tokusatsu",
-        "action/page/%d/" to "Action",
-        "adventure/page/%d/" to "Adventure",
-        "romance/page/%d/" to "Romance",
+        // "anime/ongoing/page/%d/" to "Ongoing Anime",
+        // "anime-movie/page/%d/" to "Movie",
+        // "live-action-movie/page/%d/" to "Live-Action",
+        // "tokusatsu/page/%d/" to "Tokusatsu",
+        // "action/page/%d/" to "Action",
+        // "adventure/page/%d/" to "Adventure",
+        // "romance/page/%d/" to "Romance",
     )
 
     private val headers = mapOf(
