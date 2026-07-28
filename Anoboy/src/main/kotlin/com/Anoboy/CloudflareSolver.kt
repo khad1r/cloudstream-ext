@@ -16,61 +16,64 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import okhttp3.HttpUrl.Companion.toHttpUrl
+import org.json.JSONTokener
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-// Resolves a Cloudflare cf_clearance cookie for a host, proactively and off the OkHttp
-// call path. Solving used to live inside an okhttp Interceptor, but that meant every one
-// of the main page's parallel section requests raced for the same lock *inside* its own
-// OkHttp call, and requests that lost the race got cancelled by their own per-call timeout
-// before the winner ever finished solving. A coroutine Mutex has no such timeout: losers
-// just suspend until the winner is done, then read the now-populated cache.
+// Fetches a page's HTML by letting a real WebView pass the Cloudflare challenge and then
+// reading its rendered DOM directly, rather than extracting the cf_clearance cookie and
+// replaying it through a separate OkHttp client. That cookie-replay approach looked like it
+// worked (the toast said "succeeded") but the app still saw an empty page, because Cloudflare
+// can bind cf_clearance to the TLS/browser fingerprint of the client that solved it — OkHttp
+// presents a different fingerprint than the WebView, so the replayed cookie alone doesn't
+// guarantee real content back. Reading the HTML straight out of the browser that solved the
+// challenge sidesteps that entirely.
+//
+// Solving is coroutine-Mutex-guarded (not thread-blocking) so concurrent callers (e.g. the
+// main page's parallel section loads) suspend and reuse a single in-flight result instead of
+// each racing for a lock inside their own OkHttp call and getting cancelled by their own
+// per-call timeout.
 @SuppressLint("SetJavaScriptEnabled")
 class CloudflareSolver {
     private val mutex = Mutex()
-    private var cachedCookie: String? = null
-    private var cachedHost: String? = null
+    private var cachedHtml: String? = null
+    private var cachedUrl: String? = null
     private var cachedAt = 0L
 
-    suspend fun getCookie(url: String, forceRefresh: Boolean = false): String? {
-        val host = url.toHttpUrl().host
-
+    suspend fun fetchHtml(url: String, forceRefresh: Boolean = false): String? {
         if (!forceRefresh) {
-            validCachedCookie(host)?.let { return it }
+            validCached(url)?.let { return it }
         }
 
         return mutex.withLock {
             // Another coroutine may have solved it while we were waiting for the lock.
             if (!forceRefresh) {
-                validCachedCookie(host)?.let { return@withLock it }
+                validCached(url)?.let { return@withLock it }
             }
 
             val ctx = currentApplicationContext() ?: return@withLock null
             toast(ctx, "Anoboy: bypassing Cloudflare…")
 
-            val solved = withContext(Dispatchers.IO) {
+            val html = withContext(Dispatchers.IO) {
                 solveSilently(ctx, url) ?: solveInteractively(ctx, url)
             }
 
-            toast(ctx, if (solved != null) "Anoboy: Cloudflare bypass succeeded" else "Anoboy: Cloudflare bypass failed")
+            toast(ctx, if (html != null) "Anoboy: Cloudflare bypass succeeded" else "Anoboy: Cloudflare bypass failed")
 
-            if (solved != null) {
-                cachedCookie = solved
-                cachedHost = host
+            if (html != null) {
+                cachedHtml = html
+                cachedUrl = url
                 cachedAt = System.currentTimeMillis()
             }
-            solved
+            html
         }
     }
 
-    private fun validCachedCookie(host: String): String? {
-        return cachedCookie.takeIf { host == cachedHost && System.currentTimeMillis() - cachedAt < 15 * 60_000 }
+    private fun validCached(url: String): String? {
+        return cachedHtml.takeIf { url == cachedUrl && System.currentTimeMillis() - cachedAt < 2 * 60_000 }
     }
 
     // Silent JS challenge: hidden WebView, no user interaction.
-    // Cookie is polled continuously rather than only checked in onPageFinished, since
-    // Cloudflare can set cf_clearance via a background reload/XHR after that event fires.
     private fun solveSilently(ctx: Context, url: String): String? {
         val latch = CountDownLatch(1)
         var result: String? = null
@@ -79,10 +82,13 @@ class CloudflareSolver {
 
         val poller = object : Runnable {
             override fun run() {
+                val webView = webViewRef
                 val cookies = CookieManager.getInstance().getCookie(url)
-                if (cookies != null && cookies.contains("cf_clearance")) {
-                    result = cookies
-                    latch.countDown()
+                if (webView != null && cookies != null && cookies.contains("cf_clearance")) {
+                    extractHtml(webView) { html ->
+                        result = html
+                        latch.countDown()
+                    }
                 } else if (latch.count > 0) {
                     handler.postDelayed(this, 500)
                 }
@@ -99,7 +105,7 @@ class CloudflareSolver {
             handler.postDelayed(poller, 500)
         }
 
-        latch.await(12, TimeUnit.SECONDS)
+        latch.await(15, TimeUnit.SECONDS)
         handler.removeCallbacks(poller)
 
         handler.post {
@@ -111,11 +117,12 @@ class CloudflareSolver {
     }
 
     // Interactive challenge (e.g. Turnstile checkbox): show a real WebView on top of the
-    // current screen so the user can solve it by hand, then capture the resulting cookie.
+    // current screen so the user can solve it by hand, then read the resulting page HTML.
     private fun solveInteractively(ctx: Context, url: String): String? {
         val activity = currentActivity() ?: return null
         val latch = CountDownLatch(1)
         var result: String? = null
+        var webViewRef: WebView? = null
         var dialogRef: Dialog? = null
         val handler = Handler(Looper.getMainLooper())
 
@@ -123,10 +130,13 @@ class CloudflareSolver {
 
         val poller = object : Runnable {
             override fun run() {
+                val webView = webViewRef
                 val cookies = CookieManager.getInstance().getCookie(url)
-                if (cookies != null && cookies.contains("cf_clearance")) {
-                    result = cookies
-                    dialogRef?.dismiss()
+                if (webView != null && cookies != null && cookies.contains("cf_clearance")) {
+                    extractHtml(webView) { html ->
+                        result = html
+                        dialogRef?.dismiss()
+                    }
                 } else if (latch.count > 0) {
                     handler.postDelayed(this, 500)
                 }
@@ -135,6 +145,7 @@ class CloudflareSolver {
 
         handler.post {
             val webView = WebView(activity)
+            webViewRef = webView
             webView.settings.javaScriptEnabled = true
             webView.settings.domStorageEnabled = true
             webView.webViewClient = WebViewClient()
@@ -167,6 +178,17 @@ class CloudflareSolver {
         }
 
         return result
+    }
+
+    private fun extractHtml(webView: WebView, onResult: (String?) -> Unit) {
+        webView.evaluateJavascript("document.documentElement.outerHTML") { json ->
+            val html = try {
+                if (json == null || json == "null") null else JSONTokener(json).nextValue() as? String
+            } catch (e: Exception) {
+                null
+            }
+            onResult(html)
+        }
     }
 
     private fun toast(ctx: Context, message: String) {

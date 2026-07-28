@@ -54,17 +54,24 @@ class Anoboy : MainAPI() {
 
     private val cfSolver = CloudflareSolver()
 
-    // Resolves the Cloudflare cookie proactively (before the request) rather than reacting
-    // to a 403 inside an OkHttp interceptor. See CloudflareSolver for why that matters.
+    private fun isChallengePage(code: Int, body: String): Boolean {
+        return code == 403 || code == 503 ||
+            body.contains("Just a moment", ignoreCase = true) ||
+            body.contains("cf-chl", ignoreCase = true) ||
+            body.contains("challenge-platform", ignoreCase = true)
+    }
+
+    // Cloudflare is checked by response content, not just status code, since a still-blocked
+    // request can come back as a 200 with an interstitial body instead of a 403. When blocked,
+    // the page HTML is pulled straight out of a WebView (see CloudflareSolver) rather than
+    // retried through OkHttp with a replayed cookie, which looked like it worked but still
+    // returned interstitial content in practice.
     private suspend fun fetchDoc(url: String): org.jsoup.nodes.Document {
-        val cookie = cfSolver.getCookie(url)
-        val reqHeaders = cookie?.let { headers + ("Cookie" to it) } ?: headers
-        val response = app.get(url, headers = reqHeaders)
+        val response = app.get(url, headers = headers)
+        if (!isChallengePage(response.code, response.text)) return response.document
 
-        if (response.code != 403 && response.code != 503) return response.document
-
-        val freshCookie = cfSolver.getCookie(url, forceRefresh = true) ?: return response.document
-        return app.get(url, headers = headers + ("Cookie" to freshCookie)).document
+        val html = cfSolver.fetchHtml(url) ?: return response.document
+        return org.jsoup.Jsoup.parse(html, url)
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
