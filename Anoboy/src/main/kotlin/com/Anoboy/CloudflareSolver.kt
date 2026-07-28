@@ -126,7 +126,6 @@ class CloudflareSolver {
                 extractHtml(webView) { html ->
                     checking = false
                     val blocked = html == null || isChallengeContent(html)
-                    android.util.Log.d("AnoboyDebug", "solveSilently poll htmlLen=${html?.length ?: -1} blocked=$blocked")
                     if (!blocked) {
                         result = html
                         latch.countDown()
@@ -154,7 +153,6 @@ class CloudflareSolver {
         }
 
         latch.await(15, TimeUnit.SECONDS)
-        android.util.Log.d("AnoboyDebug", "solveSilently timed out, count=${latch.count}")
         handler.removeCallbacks(poller)
 
         handler.post {
@@ -189,7 +187,6 @@ class CloudflareSolver {
                 extractHtml(webView) { html ->
                     checking = false
                     val blocked = html == null || isChallengeContent(html)
-                    android.util.Log.d("AnoboyDebug", "solveInteractively poll htmlLen=${html?.length ?: -1} blocked=$blocked")
                     if (!blocked) {
                         result = html
                         dialogRef?.dismiss()
