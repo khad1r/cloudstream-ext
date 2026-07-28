@@ -35,6 +35,11 @@ import java.util.concurrent.TimeUnit
 // per-call timeout.
 @SuppressLint("SetJavaScriptEnabled")
 class CloudflareSolver {
+    companion object {
+        private const val DESKTOP_USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    }
+
     private val mutex = Mutex()
     private var cachedHtml: String? = null
     private var cachedUrl: String? = null
@@ -108,8 +113,12 @@ class CloudflareSolver {
 
         val poller = object : Runnable {
             override fun run() {
+                val webView = webViewRef
                 val cookies = CookieManager.getInstance().getCookie(url)
-                if (cookies != null && cookies.contains("cf_clearance")) {
+                val title = webView?.title
+                android.util.Log.d("AnoboyDebug", "solveSilently poll title=$title cookies=$cookies")
+                val solved = title != null && title.isNotBlank() && !title.contains("Just a moment", ignoreCase = true)
+                if (solved) {
                     handler.removeCallbacks(extract)
                     handler.postDelayed(extract, 800)
                 } else if (latch.count > 0) {
@@ -123,6 +132,8 @@ class CloudflareSolver {
             webViewRef = webView
             webView.settings.javaScriptEnabled = true
             webView.settings.domStorageEnabled = true
+            // Default WebView UA can read as automation to Cloudflare; present a normal browser UA.
+            webView.settings.userAgentString = DESKTOP_USER_AGENT
             webView.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, loadedUrl: String?) {
                     super.onPageFinished(view, loadedUrl)
@@ -170,8 +181,12 @@ class CloudflareSolver {
 
         val poller = object : Runnable {
             override fun run() {
+                val webView = webViewRef
                 val cookies = CookieManager.getInstance().getCookie(url)
-                if (cookies != null && cookies.contains("cf_clearance")) {
+                val title = webView?.title
+                android.util.Log.d("AnoboyDebug", "solveInteractively poll title=$title cookies=$cookies")
+                val solved = title != null && title.isNotBlank() && !title.contains("Just a moment", ignoreCase = true)
+                if (solved) {
                     handler.removeCallbacks(extract)
                     handler.postDelayed(extract, 800)
                 } else if (latch.count > 0) {
@@ -185,6 +200,7 @@ class CloudflareSolver {
             webViewRef = webView
             webView.settings.javaScriptEnabled = true
             webView.settings.domStorageEnabled = true
+            webView.settings.userAgentString = DESKTOP_USER_AGENT
             webView.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, loadedUrl: String?) {
                     super.onPageFinished(view, loadedUrl)
