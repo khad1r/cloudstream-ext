@@ -52,10 +52,10 @@ class Anoboy : MainAPI() {
         "Upgrade-Insecure-Requests" to "1"
     )
 
-    private val cloudflareKiller = CloudflareKiller()
+    private val cfInterceptor = CloudflareInterceptor()
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get("$mainUrl/${request.data.format(page)}", headers = headers, interceptor = cloudflareKiller).document
+        val document = app.get("$mainUrl/${request.data.format(page)}", headers = headers, interceptor = cfInterceptor).document
         val items = document.select("a[rel=bookmark]:has(div.amv)").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, items)
     }
@@ -72,14 +72,14 @@ class Anoboy : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/?s=$query", headers = headers, interceptor = cloudflareKiller).document
+        val document = app.get("$mainUrl/?s=$query", headers = headers, interceptor = cfInterceptor).document
         return document.select("a[rel=bookmark]:has(div.amv)").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val document = app.get(url, headers = headers, interceptor = cloudflareKiller).document
+        val document = app.get(url, headers = headers, interceptor = cfInterceptor).document
         val mainSeriesUrl = document.selectFirst("th:contains(Semua Episode) + td a")?.attr("href")
-        val mainDoc = if (mainSeriesUrl != null) app.get(fixUrl(mainSeriesUrl), headers = headers, interceptor = cloudflareKiller).document else null
+        val mainDoc = if (mainSeriesUrl != null) app.get(fixUrl(mainSeriesUrl), headers = headers, interceptor = cfInterceptor).document else null
         val statusDoc = mainDoc ?: document
 
         val rawTitle = statusDoc.selectFirst("div.pagetitle h1")?.text()
@@ -209,7 +209,7 @@ class Anoboy : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data, headers = headers, interceptor = cloudflareKiller).document
+        val document = app.get(data, headers = headers, interceptor = cfInterceptor).document
 
         // 1. Load Gofile links
         val gofileUrls = document.select("a[href*='gofile.io']").mapNotNull { it.attr("href") }.distinct()
