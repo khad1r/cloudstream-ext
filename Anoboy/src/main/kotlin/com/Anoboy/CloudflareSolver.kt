@@ -33,11 +33,19 @@ import java.util.concurrent.TimeUnit
 // main page's parallel section loads) suspend and reuse a single in-flight result instead of
 // each racing for a lock inside their own OkHttp call and getting cancelled by their own
 // per-call timeout.
+// User-Agent: kept close to the WebView's real default rather than spoofed as a desktop browser.
+// Community reports (flutter_inappwebview#2586) show a *mismatched* UA is what breaks Turnstile —
+// e.g. claiming desktop Chrome while every other signal (TLS stack, JS runtime, Android version)
+// still says mobile WebView. The fix that worked there was a simple, honest, Android-consistent
+// UA. Android's default WebView UA is already that, except it embeds an explicit "; wv" marker
+// (and sometimes "Version/4.0") that Chrome itself adds specifically to identify embedded
+// WebViews — stripping just that token keeps everything else authentic while removing the one
+// explicit "this is an automated/embedded browser" tell.
 @SuppressLint("SetJavaScriptEnabled")
 class CloudflareSolver {
     companion object {
-        private const val DESKTOP_USER_AGENT =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        private const val FALLBACK_USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
     }
 
     private val mutex = Mutex()
@@ -126,6 +134,7 @@ class CloudflareSolver {
                 extractHtml(webView) { html ->
                     checking = false
                     val blocked = html == null || isChallengeContent(html)
+                    android.util.Log.d("AnoboyDebug", "solveSilently poll htmlLen=${html?.length ?: -1} blocked=$blocked")
                     if (!blocked) {
                         result = html
                         latch.countDown()
@@ -141,8 +150,7 @@ class CloudflareSolver {
             webViewRef = webView
             webView.settings.javaScriptEnabled = true
             webView.settings.domStorageEnabled = true
-            // Default WebView UA can read as automation to Cloudflare; present a normal browser UA.
-            webView.settings.userAgentString = DESKTOP_USER_AGENT
+            webView.settings.userAgentString = webViewUserAgent(ctx)
             // Turnstile runs in a challenges.cloudflare.com iframe; without third-party cookies
             // it can never persist its own verification state back, so it just keeps resetting.
             CookieManager.getInstance().setAcceptCookie(true)
@@ -153,6 +161,7 @@ class CloudflareSolver {
         }
 
         latch.await(15, TimeUnit.SECONDS)
+        android.util.Log.d("AnoboyDebug", "solveSilently timed out, count=${latch.count}")
         handler.removeCallbacks(poller)
 
         handler.post {
@@ -187,6 +196,7 @@ class CloudflareSolver {
                 extractHtml(webView) { html ->
                     checking = false
                     val blocked = html == null || isChallengeContent(html)
+                    android.util.Log.d("AnoboyDebug", "solveInteractively poll htmlLen=${html?.length ?: -1} blocked=$blocked")
                     if (!blocked) {
                         result = html
                         dialogRef?.dismiss()
@@ -202,7 +212,7 @@ class CloudflareSolver {
             webViewRef = webView
             webView.settings.javaScriptEnabled = true
             webView.settings.domStorageEnabled = true
-            webView.settings.userAgentString = DESKTOP_USER_AGENT
+            webView.settings.userAgentString = webViewUserAgent(activity)
             CookieManager.getInstance().setAcceptCookie(true)
             CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
             webView.webViewClient = WebViewClient()
@@ -252,6 +262,21 @@ class CloudflareSolver {
             }
             onResult(html)
         }
+    }
+
+    private fun webViewUserAgent(ctx: Context): String {
+        return android.webkit.WebSettings.getDefaultUserAgent(ctx)
+            .replace("; wv", "")
+            .replace(" wv", "")
+            .replace("Version/4.0 ", "")
+    }
+
+    // Exposes the same real-device UA used to solve the challenge, so plain OkHttp requests
+    // elsewhere in the provider can present a consistent, honest UA instead of a separately
+    // hardcoded desktop string.
+    fun realUserAgent(): String {
+        val ctx = currentApplicationContext() ?: return FALLBACK_USER_AGENT
+        return webViewUserAgent(ctx)
     }
 
     private fun toast(ctx: Context, message: String) {

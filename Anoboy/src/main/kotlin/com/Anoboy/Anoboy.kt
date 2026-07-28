@@ -41,18 +41,23 @@ class Anoboy : MainAPI() {
         // "romance/page/%d/" to "Romance",
     )
 
-    private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Sec-Fetch-Dest" to "document",
-        "Sec-Fetch-Mode" to "navigate",
-        "Sec-Fetch-Site" to "none",
-        "Sec-Fetch-User" to "?1",
-        "Upgrade-Insecure-Requests" to "1"
-    )
-
     private val cfSolver = CloudflareSolver()
+
+    // User-Agent is derived from the same real-device UA CloudflareSolver uses to solve the
+    // challenge (see CloudflareSolver.realUserAgent), instead of a separately hardcoded desktop
+    // string, so this plain OkHttp request and the WebView agree on what device/browser they claim.
+    private val headers by lazy {
+        mapOf(
+            "User-Agent" to cfSolver.realUserAgent(),
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Sec-Fetch-Dest" to "document",
+            "Sec-Fetch-Mode" to "navigate",
+            "Sec-Fetch-Site" to "none",
+            "Sec-Fetch-User" to "?1",
+            "Upgrade-Insecure-Requests" to "1"
+        )
+    }
 
     private fun isChallengePage(code: Int, body: String): Boolean {
         return code == 403 || code == 503 ||
@@ -68,15 +73,21 @@ class Anoboy : MainAPI() {
     // returned interstitial content in practice.
     private suspend fun fetchDoc(url: String): org.jsoup.nodes.Document {
         val response = app.get(url, headers = headers)
-        if (!isChallengePage(response.code, response.text)) return response.document
+        val blocked = isChallengePage(response.code, response.text)
+        android.util.Log.d("AnoboyDebug", "fetchDoc code=${response.code} blocked=$blocked bodyLen=${response.text.length} url=$url")
+        if (!blocked) return response.document
 
-        val html = cfSolver.fetchHtml(url) ?: return response.document
+        val html = cfSolver.fetchHtml(url)
+        android.util.Log.d("AnoboyDebug", "fetchDoc cfSolver htmlLen=${html?.length ?: -1} url=$url")
+        if (html == null) return response.document
         return org.jsoup.Jsoup.parse(html, url)
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = fetchDoc("$mainUrl/${request.data.format(page)}")
-        val items = document.select("a[rel=bookmark]:has(div.amv)").mapNotNull { it.toSearchResult() }
+        val rawMatches = document.select("a[rel=bookmark]:has(div.amv)")
+        val items = rawMatches.mapNotNull { it.toSearchResult() }
+        android.util.Log.d("AnoboyDebug", "getMainPage ${request.name} rawMatches=${rawMatches.size} items=${items.size} title=${document.title()}")
         return newHomePageResponse(request.name, items)
     }
 
