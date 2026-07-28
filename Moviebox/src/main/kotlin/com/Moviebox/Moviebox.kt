@@ -140,10 +140,15 @@ class Moviebox : MainAPI() {
             val fullUrl = "$host/wefeed-mobile-bff/tab-operating?page=1&tabId=0&version="
             val headers = getHeaders("GET", fullUrl, null)
             val res = app.get(fullUrl, headers = headers)
-            res.headers["x-user"]?.let { xUser ->
+            val token = res.headers["x-user"]?.let { xUser ->
                 parseJson<Map<String, Any>>(xUser)["token"] as? String
             }
-        } catch (_: Exception) { null }
+            android.util.Log.d("MovieboxDebug", "fetchTokenForHost host=$host code=${res.code} tokenObtained=${!token.isNullOrEmpty()}")
+            token
+        } catch (e: Exception) {
+            android.util.Log.d("MovieboxDebug", "fetchTokenForHost host=$host failed: ${e.message}")
+            null
+        }
     }
 
     private suspend fun makeApiRequest(method: String, pathAndQuery: String, bodyJson: String? = null): NiceResponse {
@@ -193,14 +198,18 @@ class Moviebox : MainAPI() {
                     }
                 }
 
+                android.util.Log.d("MovieboxDebug", "makeApiRequest host=$host method=$method path=$pathAndQuery code=${response.code} successful=${response.isSuccessful}")
+
                 if (response.isSuccessful && !response.text.contains("miss token", ignoreCase = true)) {
                     activeHostIdx = idx
                     return response
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                android.util.Log.d("MovieboxDebug", "makeApiRequest host=$host method=$method path=$pathAndQuery threw: ${e.message}")
                 continue
             }
         }
+        android.util.Log.d("MovieboxDebug", "makeApiRequest host pool exhausted method=$method path=$pathAndQuery")
         throw ErrorLoadingException("MovieBox API host pool exhausted")
     }
 
@@ -230,7 +239,10 @@ class Moviebox : MainAPI() {
                 item.subjects?.mapNotNullTo(items) { it.toSearchResponse(this) }
                 item.banner?.banners?.mapNotNullTo(items) { it.subject?.toSearchResponse(this) }
             }
-        } catch (_: Exception) {}
+            android.util.Log.d("MovieboxDebug", "getMainPage ${request.name} primaryApi items=${items.size}")
+        } catch (e: Exception) {
+            android.util.Log.d("MovieboxDebug", "getMainPage ${request.name} primaryApi failed: ${e.message}")
+        }
 
         if (items.isEmpty()) {
             try {
@@ -243,7 +255,10 @@ class Moviebox : MainAPI() {
                 val dataObj = res.parsedSafe<MediaData>()?.data
                 dataObj?.subjectList?.mapNotNullTo(items) { it.toSearchResponse(this) }
                 dataObj?.items?.mapNotNullTo(items) { it.toSearchResponse(this) }
-            } catch (_: Exception) {}
+                android.util.Log.d("MovieboxDebug", "getMainPage ${request.name} webFallback code=${res.code} items=${items.size}")
+            } catch (e: Exception) {
+                android.util.Log.d("MovieboxDebug", "getMainPage ${request.name} webFallback failed: ${e.message}")
+            }
         }
 
         if (items.isEmpty()) throw ErrorLoadingException("No Data Found")
@@ -267,7 +282,9 @@ class Moviebox : MainAPI() {
             resItem.subjects?.mapNotNullTo(items) { it.toSearchResponse(this) }
         }
         dataObj?.items?.mapNotNullTo(items) { it.toSearchResponse(this) }
-        return items.distinctBy { it.url }
+        val results = items.distinctBy { it.url }
+        android.util.Log.d("MovieboxDebug", "search query=$query results=${results.size}")
+        return results
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -367,15 +384,19 @@ class Moviebox : MainAPI() {
                 val response = makeApiRequest("GET", path)
                 val items = response.parsedSafe<ResourceData>()?.data?.list
                     ?: response.parsedSafe<ResourceData>()?.list
+                android.util.Log.d("MovieboxDebug", "loadLinks id=$id resolution=$res items=${items?.size ?: 0}")
                 items?.let {
                     synchronized(resourceLinks) {
                         resourceLinks.addAll(it)
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                android.util.Log.d("MovieboxDebug", "loadLinks id=$id resolution=$res failed: ${e.message}")
+            }
         }
 
         val uniqueStreams = resourceLinks.distinctBy { it.resourceLink ?: it.url }
+        android.util.Log.d("MovieboxDebug", "loadLinks id=$id uniqueStreams=${uniqueStreams.size}")
         var firstResourceId: String? = null
 
         for (item in uniqueStreams) {
