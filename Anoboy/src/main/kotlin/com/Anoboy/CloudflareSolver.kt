@@ -82,22 +82,36 @@ class CloudflareSolver {
     }
 
     // Silent JS challenge: hidden WebView, no user interaction.
+    //
+    // "cf_clearance cookie present" is not the same moment as "page finished rendering":
+    // Cloudflare typically sets the cookie then reloads/redirects to the real content, and if
+    // the cookie was already set from an earlier solve, the very first poll tick can see it as
+    // cleared before a brand new WebView has loaded anything at all. So extraction is debounced:
+    // every time the cookie is seen present, or a fresh page load finishes, the extraction timer
+    // is (re)armed for 800ms later. It only actually fires once things go quiet.
     private fun solveSilently(ctx: Context, url: String): String? {
         val latch = CountDownLatch(1)
         var result: String? = null
         var webViewRef: WebView? = null
         val handler = Handler(Looper.getMainLooper())
 
+        val extract = Runnable {
+            val webView = webViewRef
+            if (webView != null) {
+                extractHtml(webView) { html ->
+                    android.util.Log.d("AnoboyDebug", "solveSilently extractHtml htmlLen=${html?.length ?: -1}")
+                    result = html
+                    latch.countDown()
+                }
+            }
+        }
+
         val poller = object : Runnable {
             override fun run() {
-                val webView = webViewRef
                 val cookies = CookieManager.getInstance().getCookie(url)
-                if (webView != null && cookies != null && cookies.contains("cf_clearance")) {
-                    extractHtml(webView) { html ->
-                        android.util.Log.d("AnoboyDebug", "solveSilently extractHtml htmlLen=${html?.length ?: -1}")
-                        result = html
-                        latch.countDown()
-                    }
+                if (cookies != null && cookies.contains("cf_clearance")) {
+                    handler.removeCallbacks(extract)
+                    handler.postDelayed(extract, 800)
                 } else if (latch.count > 0) {
                     handler.postDelayed(this, 500)
                 }
@@ -109,7 +123,12 @@ class CloudflareSolver {
             webViewRef = webView
             webView.settings.javaScriptEnabled = true
             webView.settings.domStorageEnabled = true
-            webView.webViewClient = WebViewClient()
+            webView.webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, loadedUrl: String?) {
+                    super.onPageFinished(view, loadedUrl)
+                    poller.run()
+                }
+            }
             webView.loadUrl(url)
             handler.postDelayed(poller, 500)
         }
@@ -117,6 +136,7 @@ class CloudflareSolver {
         latch.await(15, TimeUnit.SECONDS)
         android.util.Log.d("AnoboyDebug", "solveSilently timed out, count=${latch.count}")
         handler.removeCallbacks(poller)
+        handler.removeCallbacks(extract)
 
         handler.post {
             webViewRef?.stopLoading()
@@ -138,15 +158,22 @@ class CloudflareSolver {
 
         toast(ctx, "Anoboy: please complete the verification shown")
 
+        val extract = Runnable {
+            val webView = webViewRef
+            if (webView != null) {
+                extractHtml(webView) { html ->
+                    result = html
+                    dialogRef?.dismiss()
+                }
+            }
+        }
+
         val poller = object : Runnable {
             override fun run() {
-                val webView = webViewRef
                 val cookies = CookieManager.getInstance().getCookie(url)
-                if (webView != null && cookies != null && cookies.contains("cf_clearance")) {
-                    extractHtml(webView) { html ->
-                        result = html
-                        dialogRef?.dismiss()
-                    }
+                if (cookies != null && cookies.contains("cf_clearance")) {
+                    handler.removeCallbacks(extract)
+                    handler.postDelayed(extract, 800)
                 } else if (latch.count > 0) {
                     handler.postDelayed(this, 500)
                 }
@@ -158,7 +185,12 @@ class CloudflareSolver {
             webViewRef = webView
             webView.settings.javaScriptEnabled = true
             webView.settings.domStorageEnabled = true
-            webView.webViewClient = WebViewClient()
+            webView.webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, loadedUrl: String?) {
+                    super.onPageFinished(view, loadedUrl)
+                    poller.run()
+                }
+            }
 
             val dialog = Dialog(activity)
             dialogRef = dialog
@@ -182,6 +214,7 @@ class CloudflareSolver {
 
         latch.await(3, TimeUnit.MINUTES)
         handler.removeCallbacks(poller)
+        handler.removeCallbacks(extract)
 
         handler.post {
             dialogRef?.takeIf { it.isShowing }?.dismiss()
