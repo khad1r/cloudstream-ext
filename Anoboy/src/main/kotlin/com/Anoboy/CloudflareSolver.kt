@@ -99,30 +99,26 @@ class CloudflareSolver {
         var result: String? = null
         var webViewRef: WebView? = null
         val handler = Handler(Looper.getMainLooper())
-
-        val extract = Runnable {
-            val webView = webViewRef
-            if (webView != null) {
-                extractHtml(webView) { html ->
-                    android.util.Log.d("AnoboyDebug", "solveSilently extractHtml htmlLen=${html?.length ?: -1}")
-                    result = html
-                    latch.countDown()
-                }
-            }
-        }
+        var checking = false
 
         val poller = object : Runnable {
             override fun run() {
                 val webView = webViewRef
-                val cookies = CookieManager.getInstance().getCookie(url)
-                val title = webView?.title
-                android.util.Log.d("AnoboyDebug", "solveSilently poll title=$title cookies=$cookies")
-                val solved = title != null && title.isNotBlank() && !title.contains("Just a moment", ignoreCase = true)
-                if (solved) {
-                    handler.removeCallbacks(extract)
-                    handler.postDelayed(extract, 800)
-                } else if (latch.count > 0) {
-                    handler.postDelayed(this, 500)
+                if (webView == null || checking) {
+                    if (latch.count > 0) handler.postDelayed(this, 500)
+                    return
+                }
+                checking = true
+                extractHtml(webView) { html ->
+                    checking = false
+                    val blocked = html == null || isChallengeContent(html)
+                    android.util.Log.d("AnoboyDebug", "solveSilently poll htmlLen=${html?.length ?: -1} blocked=$blocked")
+                    if (!blocked) {
+                        result = html
+                        latch.countDown()
+                    } else if (latch.count > 0) {
+                        handler.postDelayed(this, 800)
+                    }
                 }
             }
         }
@@ -134,20 +130,14 @@ class CloudflareSolver {
             webView.settings.domStorageEnabled = true
             // Default WebView UA can read as automation to Cloudflare; present a normal browser UA.
             webView.settings.userAgentString = DESKTOP_USER_AGENT
-            webView.webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView?, loadedUrl: String?) {
-                    super.onPageFinished(view, loadedUrl)
-                    poller.run()
-                }
-            }
+            webView.webViewClient = WebViewClient()
             webView.loadUrl(url)
-            handler.postDelayed(poller, 500)
+            handler.postDelayed(poller, 800)
         }
 
         latch.await(15, TimeUnit.SECONDS)
         android.util.Log.d("AnoboyDebug", "solveSilently timed out, count=${latch.count}")
         handler.removeCallbacks(poller)
-        handler.removeCallbacks(extract)
 
         handler.post {
             webViewRef?.stopLoading()
@@ -169,28 +159,25 @@ class CloudflareSolver {
 
         toast(ctx, "Anoboy: please complete the verification shown")
 
-        val extract = Runnable {
-            val webView = webViewRef
-            if (webView != null) {
-                extractHtml(webView) { html ->
-                    result = html
-                    dialogRef?.dismiss()
-                }
-            }
-        }
-
+        var checking = false
         val poller = object : Runnable {
             override fun run() {
                 val webView = webViewRef
-                val cookies = CookieManager.getInstance().getCookie(url)
-                val title = webView?.title
-                android.util.Log.d("AnoboyDebug", "solveInteractively poll title=$title cookies=$cookies")
-                val solved = title != null && title.isNotBlank() && !title.contains("Just a moment", ignoreCase = true)
-                if (solved) {
-                    handler.removeCallbacks(extract)
-                    handler.postDelayed(extract, 800)
-                } else if (latch.count > 0) {
-                    handler.postDelayed(this, 500)
+                if (webView == null || checking) {
+                    if (latch.count > 0) handler.postDelayed(this, 700)
+                    return
+                }
+                checking = true
+                extractHtml(webView) { html ->
+                    checking = false
+                    val blocked = html == null || isChallengeContent(html)
+                    android.util.Log.d("AnoboyDebug", "solveInteractively poll htmlLen=${html?.length ?: -1} blocked=$blocked")
+                    if (!blocked) {
+                        result = html
+                        dialogRef?.dismiss()
+                    } else if (latch.count > 0) {
+                        handler.postDelayed(this, 700)
+                    }
                 }
             }
         }
@@ -201,12 +188,7 @@ class CloudflareSolver {
             webView.settings.javaScriptEnabled = true
             webView.settings.domStorageEnabled = true
             webView.settings.userAgentString = DESKTOP_USER_AGENT
-            webView.webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView?, loadedUrl: String?) {
-                    super.onPageFinished(view, loadedUrl)
-                    poller.run()
-                }
-            }
+            webView.webViewClient = WebViewClient()
 
             val dialog = Dialog(activity)
             dialogRef = dialog
@@ -225,18 +207,23 @@ class CloudflareSolver {
             webView.loadUrl(url)
             dialog.show()
             dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-            handler.postDelayed(poller, 500)
+            handler.postDelayed(poller, 800)
         }
 
         latch.await(3, TimeUnit.MINUTES)
         handler.removeCallbacks(poller)
-        handler.removeCallbacks(extract)
 
         handler.post {
             dialogRef?.takeIf { it.isShowing }?.dismiss()
         }
 
         return result
+    }
+
+    private fun isChallengeContent(html: String): Boolean {
+        return html.contains("Just a moment", ignoreCase = true) ||
+            html.contains("cf-chl", ignoreCase = true) ||
+            html.contains("challenge-platform", ignoreCase = true)
     }
 
     private fun extractHtml(webView: WebView, onResult: (String?) -> Unit) {
