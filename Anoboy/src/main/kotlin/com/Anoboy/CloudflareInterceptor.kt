@@ -11,6 +11,7 @@ import android.view.Window
 import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
 import okhttp3.Interceptor
 import okhttp3.Response
 import java.util.concurrent.CountDownLatch
@@ -27,21 +28,24 @@ class CloudflareInterceptor : Interceptor {
         val response = chain.proceed(request)
 
         if (response.code != 403 && response.code != 503) return response
+        response.close()
 
-        val ctx = currentApplicationContext() ?: return response
+        val ctx = currentApplicationContext() ?: return chain.proceed(request)
         val host = request.url.host
 
         val cookie = cachedCookie.takeIf { host == cachedHost && System.currentTimeMillis() - cachedAt < 15 * 60_000 }
             ?: run {
-                response.close()
                 val url = request.url.toString()
-                (solveSilently(ctx, url) ?: solveInteractively(url))?.also {
+                toast(ctx, "Anoboy: bypassing Cloudflare…")
+                val solved = solveSilently(ctx, url) ?: solveInteractively(ctx, url)
+                toast(ctx, if (solved != null) "Anoboy: Cloudflare bypass succeeded" else "Anoboy: Cloudflare bypass failed")
+                solved?.also {
                     cachedCookie = it
                     cachedHost = host
                     cachedAt = System.currentTimeMillis()
                 }
             }
-            ?: return response
+            ?: return chain.proceed(request)
 
         val newRequest = request.newBuilder().header("Cookie", cookie).build()
         return chain.proceed(newRequest)
@@ -83,11 +87,13 @@ class CloudflareInterceptor : Interceptor {
 
     // Interactive challenge (e.g. Turnstile checkbox): show a real WebView on top of the
     // current screen so the user can solve it by hand, then capture the resulting cookie.
-    private fun solveInteractively(url: String): String? {
+    private fun solveInteractively(ctx: Context, url: String): String? {
         val activity = currentActivity() ?: return null
         val latch = CountDownLatch(1)
         var result: String? = null
         var dialogRef: Dialog? = null
+
+        toast(ctx, "Anoboy: please complete the verification shown")
 
         Handler(Looper.getMainLooper()).post {
             val webView = WebView(activity)
@@ -131,6 +137,12 @@ class CloudflareInterceptor : Interceptor {
         }
 
         return result
+    }
+
+    private fun toast(ctx: Context, message: String) {
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(ctx, message, Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun currentApplicationContext(): Context? {
