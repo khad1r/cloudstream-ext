@@ -32,13 +32,13 @@ class Anoboy : MainAPI() {
 
     override val mainPage = mainPageOf(
         "page/%d/" to "Latest Release",
-        // "anime/ongoing/page/%d/" to "Ongoing Anime",
-        // "anime-movie/page/%d/" to "Movie",
-        // "live-action-movie/page/%d/" to "Live-Action",
-        // "tokusatsu/page/%d/" to "Tokusatsu",
-        // "action/page/%d/" to "Action",
-        // "adventure/page/%d/" to "Adventure",
-        // "romance/page/%d/" to "Romance",
+        "anime/ongoing/page/%d/" to "Ongoing Anime",
+        "anime-movie/page/%d/" to "Movie",
+        "live-action-movie/page/%d/" to "Live-Action",
+        "tokusatsu/page/%d/" to "Tokusatsu",
+        "action/page/%d/" to "Action",
+        "adventure/page/%d/" to "Adventure",
+        "romance/page/%d/" to "Romance",
     )
 
     private val cfSolver = CloudflareSolver()
@@ -91,10 +91,15 @@ class Anoboy : MainAPI() {
         return newHomePageResponse(request.name, items)
     }
 
+    // Images are lazy-loaded: <img class="lazy" data-src="/real.jpg" src="data:image/svg+xml,...">
+    private fun Element.lazyImgUrl(): String? {
+        return fixUrlNull(this.attr("data-src").takeIf { it.isNotBlank() } ?: this.attr("src"))
+    }
+
     private fun Element.toSearchResult(): AnimeSearchResponse? {
         val href = fixUrlNull(this.attr("href")) ?: return null
         val title = this.selectFirst("h3.ibox1, h3.ibox")?.text()?.trim() ?: this.attr("title") ?: return null
-        val posterUrl = fixUrlNull(this.selectFirst("img")?.attr("src"))
+        val posterUrl = this.selectFirst("img")?.lazyImgUrl()
         val statusText = this.selectFirst("div.jamup")?.text()?.trim() ?: ""
         return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = posterUrl
@@ -125,8 +130,8 @@ class Anoboy : MainAPI() {
             .replace(Regex(",?\\s*Season\\s+[\\d\\+\\s-]+.*", RegexOption.IGNORE_CASE), "")
             .trim()
 
-        val poster = fixUrlNull(document.selectFirst("div.sisi.entry-content img")?.attr("src"))
-            ?: fixUrlNull(statusDoc.selectFirst("div.sisi.entry-content img")?.attr("src"))
+        val poster = document.selectFirst("div.sisi.entry-content img")?.lazyImgUrl()
+            ?: statusDoc.selectFirst("div.sisi.entry-content img")?.lazyImgUrl()
         val tags = document.selectFirst("td#genre")?.text()?.split(",")?.map { it.trim() }
             ?: statusDoc.selectFirst("td#genre")?.text()?.split(",")?.map { it.trim() }
             ?: emptyList()
@@ -241,15 +246,19 @@ class Anoboy : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = fetchDoc(data)
+        val rawHtmlLen = document.outerHtml().length
+        android.util.Log.d("AnoboyDebug", "loadLinks data=$data docLen=$rawHtmlLen containsGofile=${document.outerHtml().contains("gofile", ignoreCase = true)}")
 
         // 1. Load Gofile links
         val gofileUrls = document.select("a[href*='gofile.io']").mapNotNull { it.attr("href") }.distinct()
+        android.util.Log.d("AnoboyDebug", "loadLinks gofileUrls=${gofileUrls.size}")
         for (url in gofileUrls) {
             loadExtractor(url, mainUrl, subtitleCallback, callback)
         }
 
         // 2. Load player iframe / mirrors (Btube, etc.)
         val players = document.select("div.vmiror a").mapNotNull { it.attr("data-video") }.map { fixUrl(it) }
+        android.util.Log.d("AnoboyDebug", "loadLinks players=${players.size}")
         for (player in players) {
             loadExtractor(player, mainUrl, subtitleCallback, callback)
         }
