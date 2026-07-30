@@ -88,7 +88,7 @@ class Anoboy : MainAPI() {
         val rawMatches = document.select("a[rel=bookmark]:has(div.amv)")
         val items = rawMatches.mapNotNull { it.toSearchResult() }
         android.util.Log.d("AnoboyDebug", "getMainPage ${request.name} rawMatches=${rawMatches.size} items=${items.size} title=${document.title()}")
-        return newHomePageResponse(request.name, items)
+        return newHomePageResponse(request.name, items,isHorizontalImages = true)
     }
 
     // Images are lazy-loaded: <img class="lazy" data-src="/real.jpg" src="data:image/svg+xml,...">
