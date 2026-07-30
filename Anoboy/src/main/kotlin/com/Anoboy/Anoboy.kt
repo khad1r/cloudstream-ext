@@ -86,9 +86,13 @@ class Anoboy : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = fetchDoc("$mainUrl/${request.data.format(page)}")
         val rawMatches = document.select("a[rel=bookmark]:has(div.amv)")
-        val items = rawMatches.mapNotNull { it.toSearchResult() }
+        val items = rawMatches.mapNotNull { it.toSearchResult() }.distinctBy { it.url }
         android.util.Log.d("AnoboyDebug", "getMainPage ${request.name} rawMatches=${rawMatches.size} items=${items.size} title=${document.title()}")
-        return newHomePageResponse(request.name, items,isHorizontalImages = true)
+        val hasNext = document.selectFirst(".wp-pagenavi a.nextpostslink") != null
+        return newHomePageResponse(
+            listOf(HomePageList(request.name, items, isHorizontalImages = true)),
+            hasNext
+        )
     }
 
     // Images are lazy-loaded: <img class="lazy" data-src="/real.jpg" src="data:image/svg+xml,...">
