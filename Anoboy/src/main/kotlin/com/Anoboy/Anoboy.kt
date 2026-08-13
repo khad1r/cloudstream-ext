@@ -155,19 +155,16 @@ class Anoboy : MainAPI() {
 
         if (hqElements.isNotEmpty()) {
             val seasonsMap = LinkedHashMap<Int, MutableList<Episode>>()
-            var autoSeasonCounter = 1
+            val totalHq = hqElements.size
 
-            for (hq in hqElements) {
+            for ((index, hq) in hqElements.withIndex()) {
                 val hqText = hq.text().trim()
                 val extractedSeason = Regex("Season\\s*(\\d+)", RegexOption.IGNORE_CASE)
                     .find(hqText)?.groupValues?.get(1)?.toIntOrNull()
 
-                val seasonNum = extractedSeason ?: autoSeasonCounter
-                if (extractedSeason != null) {
-                    autoSeasonCounter = maxOf(autoSeasonCounter, extractedSeason + 1)
-                } else {
-                    autoSeasonCounter++
-                }
+                // If explicit season number is present (e.g. "Season 2"), use it.
+                // Otherwise, top hq (index 0) represents the latest season (totalHq - index).
+                val seasonNum = extractedSeason ?: (totalHq - index)
 
                 val singleLink = hq.nextElementSibling()?.takeIf { it.hasClass("singlelink") }
                     ?: hq.nextElementSiblings().firstOrNull { it.hasClass("singlelink") }
