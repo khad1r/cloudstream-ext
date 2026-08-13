@@ -14,13 +14,23 @@ open class Gofile : ExtractorApi() {
         val contentId = url.substringBefore("?").removeSuffix("/").substringAfterLast("/")
         if (contentId.isEmpty()) return emptyList()
 
+        val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        val language = "en-US"
+
         // 1. Create a guest account to get the token
-        val accountRes = app.post("https://api.gofile.io/accounts").parsedSafe<GofileAccountResponse>()
+        val accountRes = app.post(
+            "https://api.gofile.io/accounts",
+            headers = mapOf(
+                "User-Agent" to userAgent,
+                "Accept" to "*/*",
+                "Accept-Language" to "en-US,en;q=0.9",
+                "Referer" to "https://gofile.io/",
+                "Origin" to "https://gofile.io"
+            )
+        ).parsedSafe<GofileAccountResponse>()
         val token = accountRes?.data?.token ?: return emptyList()
 
         // 2. Generate the X-Website-Token
-        val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        val language = "en-US"
         val wt = generateWT(token, userAgent, language)
 
         // 3. Request the content metadata
@@ -32,14 +42,22 @@ open class Gofile : ExtractorApi() {
             "Authorization" to "Bearer $token",
             "X-BL" to language,
             "X-Website-Token" to wt,
-            "Referer" to "https://gofile.io/"
+            "Referer" to "https://gofile.io/",
+            "Origin" to "https://gofile.io"
         )
 
         val contentRes = app.get(contentUrl, headers = headers).parsedSafe<GofileContentResponse>()
-        val children = contentRes?.data?.children?.values ?: return emptyList()
+        val data = contentRes?.data ?: return emptyList()
+        val children = data.children?.values?.toList() ?: emptyList()
+
+        val files = if (data.type == "file" && !data.link.isNullOrEmpty()) {
+            listOf(GofileChild(type = data.type, name = data.name, link = data.link)) + children
+        } else {
+            children
+        }
 
         val sources = mutableListOf<ExtractorLink>()
-        for (child in children) {
+        for (child in files) {
             if (child.type == "file" && !child.link.isNullOrEmpty()) {
                 sources.add(
                     newExtractorLink(
@@ -51,7 +69,8 @@ open class Gofile : ExtractorApi() {
                         this.quality = getQualityFromName(child.name)
                         this.headers = mapOf(
                             "Cookie" to "accountToken=$token",
-                            "User-Agent" to userAgent
+                            "User-Agent" to userAgent,
+                            "Referer" to "https://gofile.io/"
                         )
                     }
                 )
@@ -66,7 +85,7 @@ open class Gofile : ExtractorApi() {
     }
 
     private fun generateWT(token: String, userAgent: String, language: String): String {
-        val timeSlot = (System.currentTimeMillis() / 1000 / 3600 / 4).toString()
+        val timeSlot = (System.currentTimeMillis() / 1000L / 3600L / 4L).toString()
         val raw = "$userAgent::$language::$token::$timeSlot::9844d94d963d30"
         return sha256(raw)
     }
@@ -101,7 +120,10 @@ open class Gofile : ExtractorApi() {
     )
 
     data class GofileData(
-        @JsonProperty("children") val children: Map<String, GofileChild>? = null
+        @JsonProperty("children") val children: Map<String, GofileChild>? = null,
+        @JsonProperty("type") val type: String? = null,
+        @JsonProperty("name") val name: String? = null,
+        @JsonProperty("link") val link: String? = null
     )
 
     data class GofileChild(

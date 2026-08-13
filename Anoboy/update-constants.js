@@ -25,50 +25,61 @@ async function getAnoboyDomain() {
 }
 
 async function getGofileSalt() {
-    try {
-        console.log("Fetching Gofile wt.obf.js...");
-        const res = await fetch("https://gofile.io/dist/js/wt.obf.js");
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const code = await res.text();
+    const urls = [
+        "https://gofile.io/js/wt.obf.js",
+        "https://gofile.io/dist/js/wt.obf.js"
+    ];
+    for (const url of urls) {
+        try {
+            console.log(`Fetching Gofile script: ${url}...`);
+            const res = await fetch(url, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+                }
+            });
+            if (!res.ok) continue;
+            const code = await res.text();
 
-        // Find the SHA-256 fractional constant (hex/decimal format) to locate the function
-        const sha256Regex = /0x428a2f98|0x428a2f98|1116352408/i;
-        const match = code.match(sha256Regex);
-        if (!match) throw new Error("Could not find SHA-256 constant in wt.obf.js");
-        const sha256Index = match.index;
+            // Find the SHA-256 fractional constant (hex/decimal format) to locate the function
+            const sha256Regex = /0x428a2f98|1116352408/i;
+            const match = code.match(sha256Regex);
+            if (!match) continue;
+            const sha256Index = match.index;
 
-        const preCode = code.substring(0, sha256Index);
-        const funcMatch = [...preCode.matchAll(/function\s+(\w+)\s*\(\s*(\w+)\s*\)\s*\{/g)].pop();
-        if (!funcMatch) throw new Error("Could not parse SHA-256 function signature");
+            const preCode = code.substring(0, sha256Index);
+            const funcMatch = [...preCode.matchAll(/function\s+(\w+)\s*\(\s*(\w+)\s*\)\s*\{/g)].pop();
+            if (!funcMatch) continue;
 
-        const funcName = funcMatch[1];
-        const paramName = funcMatch[2];
+            const funcName = funcMatch[1];
+            const paramName = funcMatch[2];
 
-        // Replace the SHA-256 hash function to return the raw string instead of hashing it
-        const target = `function ${funcName}(${paramName}){`;
-        const replacement = `function ${funcName}(${paramName}){ return ${paramName};`;
-        const modifiedCode = code.replace(target, replacement);
+            // Replace the SHA-256 hash function to return the raw string instead of hashing it
+            const target = `function ${funcName}(${paramName}){`;
+            const replacement = `function ${funcName}(${paramName}){ return ${paramName};`;
+            const modifiedCode = code.replace(target, replacement);
 
-        // Run the modified script in a sandbox to extract the salt
-        const sandbox = {
-            navigator: {
-                userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                language: "en-US"
-            }
-        };
-        vm.createContext(sandbox);
-        vm.runInContext(modifiedCode, sandbox);
+            // Run the modified script in a sandbox to extract the salt
+            const sandbox = {
+                navigator: {
+                    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    language: "en-US"
+                }
+            };
+            vm.createContext(sandbox);
+            vm.runInContext(modifiedCode, sandbox);
 
-        // Call the deobfuscated generateWT function
-        const rawString = sandbox.generateWT("myToken");
-        const parts = rawString.split("::");
-        const salt = parts[parts.length - 1];
-        console.log(`Extracted Gofile salt: ${salt}`);
-        return salt;
-    } catch (e) {
-        console.error(`Failed to extract Gofile salt: ${e.message}`);
-        return "9844d94d963d30"; // fallback to current known salt
+            // Call the deobfuscated generateWT function
+            const rawString = sandbox.generateWT("myToken");
+            const parts = rawString.split("::");
+            const salt = parts[parts.length - 1];
+            console.log(`Extracted Gofile salt: ${salt}`);
+            return salt;
+        } catch (e) {
+            console.warn(`Failed to extract Gofile salt from ${url}: ${e.message}`);
+        }
     }
+    console.error("Failed to extract Gofile salt from all URLs, using fallback.");
+    return "9844d94d963d30"; // fallback to current known salt
 }
 
 async function updateConstants() {
