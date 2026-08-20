@@ -86,7 +86,7 @@ open class Gofile : ExtractorApi() {
 
     private fun generateWT(token: String, userAgent: String, language: String): String {
         val timeSlot = (System.currentTimeMillis() / 1000L / 3600L / 4L).toString()
-        val raw = "$userAgent::$language::$token::$timeSlot::9844d94d963d30"
+        val raw = "$userAgent::$language::$token::$timeSlot::12af056dacea0b"
         return sha256(raw)
     }
 
