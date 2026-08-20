@@ -1,5 +1,4 @@
-version = 1
-
+// Plugin version is dynamically set based on git commit count in root build.gradle.kts
 cloudstream {
     language = "id"
     description = "Movibox - Movie subtitle indonesia"

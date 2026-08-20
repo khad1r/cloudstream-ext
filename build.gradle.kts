@@ -31,10 +31,31 @@ fun Project.cloudstream(configuration: CloudstreamExtension.() -> Unit) = extens
 
 fun Project.android(configuration: BaseExtension.() -> Unit) = extensions.getByName<BaseExtension>("android").configuration()
 
+fun Project.getGitVersion(): Int {
+    return try {
+        val stdout = java.io.ByteArrayOutputStream()
+        project.exec {
+            workingDir = rootProject.projectDir
+            commandLine("git", "rev-list", "--count", "HEAD", "--", project.projectDir.name)
+            standardOutput = stdout
+        }
+        val count = stdout.toString().trim().toInt()
+        if (count > 0) count else 1
+    } catch (_: Exception) {
+        when (project.name) {
+            "Anoboy" -> 33
+            "Moviebox" -> 16
+            else -> 1
+        }
+    }
+}
+
 subprojects {
     apply(plugin = "com.android.library")
     apply(plugin = "kotlin-android")
     apply(plugin = "com.lagradost.cloudstream3.gradle")
+
+    version = getGitVersion()
 
     cloudstream {
         // when running through github workflow, GITHUB_REPOSITORY should contain current repository name
