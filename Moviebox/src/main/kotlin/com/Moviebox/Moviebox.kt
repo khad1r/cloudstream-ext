@@ -31,6 +31,7 @@ class Moviebox : MainAPI() {
         "https://api5.aoneroom.com",
         "https://api4.aoneroom.com",
         "https://api4sg.aoneroom.com",
+        "https://api3.aoneroom.com",
         "https://api.inmoviebox.com"
     )
     private var activeHostIdx = 0
