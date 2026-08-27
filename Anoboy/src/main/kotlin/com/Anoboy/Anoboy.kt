@@ -152,42 +152,35 @@ class Anoboy : MainAPI() {
         // Episodes extraction with season support
         val hqElements = statusDoc.select("div.hq")
         val episodes = mutableListOf<Episode>()
+        val seasonNamesList = mutableListOf<SeasonData>()
 
         if (hqElements.isNotEmpty()) {
-            val seasonsMap = LinkedHashMap<Int, MutableList<Episode>>()
-            val totalHq = hqElements.size
-
-            for ((index, hq) in hqElements.withIndex()) {
-                val hqText = hq.text().trim()
-                val extractedSeason = Regex("Season\\s*(\\d+)", RegexOption.IGNORE_CASE)
-                    .find(hqText)?.groupValues?.get(1)?.toIntOrNull()
-
-                // If explicit season number is present (e.g. "Season 2"), use it.
-                // Otherwise, top hq (index 0) represents the latest season (totalHq - index).
-                val seasonNum = extractedSeason ?: (totalHq - index)
+            var seasonCounter = 1
+            for (hq in hqElements) {
+                val rawHqText = hq.text().trim()
+                val seasonName = formatSeasonName(rawHqText, title)
 
                 val singleLink = hq.nextElementSibling()?.takeIf { it.hasClass("singlelink") }
                     ?: hq.nextElementSiblings().firstOrNull { it.hasClass("singlelink") }
 
-                val links = singleLink?.select("ul.lcp_catlist li a") ?: emptyList()
-                val seasonEpisodes = links.mapNotNull { parseEpisode(it, seasonNum) }.reversed()
+                val rawLinks = singleLink?.select("ul.lcp_catlist li a")
+                val links = if (!rawLinks.isNullOrEmpty()) rawLinks else singleLink?.select("a") ?: emptyList()
+                val seasonEpisodes = links.mapNotNull { parseEpisode(it, seasonCounter) }
+                    .distinctBy { it.data }
+                    .reversed()
 
                 if (seasonEpisodes.isNotEmpty()) {
-                    seasonsMap.getOrPut(seasonNum) { mutableListOf() }.addAll(seasonEpisodes)
+                    seasonNamesList.add(SeasonData(season = seasonCounter, name = seasonName))
+                    episodes.addAll(seasonEpisodes)
+                    seasonCounter++
                 }
-            }
-
-            // Order seasons in descending order (latest season first) so CloudStream defaults to opening the latest season
-            val sortedSeasonKeys = seasonsMap.keys.sortedDescending()
-            for (sKey in sortedSeasonKeys) {
-                seasonsMap[sKey]?.let { episodes.addAll(it) }
             }
         }
 
         if (episodes.isEmpty()) {
             val episodesList = statusDoc.select("ul.lcp_catlist li a")
             if (episodesList.isNotEmpty()) {
-                episodes.addAll(episodesList.mapNotNull { parseEpisode(it, 1) }.reversed())
+                episodes.addAll(episodesList.mapNotNull { parseEpisode(it, 1) }.distinctBy { it.data }.reversed())
             } else {
                 val episodeNumber = rawTitle.replace(Regex(".*Episode\\s*(\\d+).*", RegexOption.IGNORE_CASE), "$1").toIntOrNull()
                 episodes.add(newEpisode(url) {
@@ -199,19 +192,84 @@ class Anoboy : MainAPI() {
             }
         }
 
-        return newAnimeLoadResponse(title, url, type) {
+        val responseUrl = mainSeriesUrl?.let { fixUrl(it) } ?: url
+
+        // If user opened an episode link rather than the main series page, focus CloudStream on that episode
+        if (mainSeriesUrl != null) {
+            val cleanInputUrl = fixUrl(url).trimEnd('/')
+            val targetEp = episodes.firstOrNull { fixUrl(it.data).trimEnd('/') == cleanInputUrl }
+                ?: run {
+                    val urlSlug = cleanInputUrl.substringAfterLast('/')
+                    episodes.firstOrNull { fixUrl(it.data).trimEnd('/').endsWith(urlSlug) }
+                } ?: run {
+                    val epNum = Regex("(?:episode|ep)[^\\d]*(\\d+)", RegexOption.IGNORE_CASE)
+                        .find(url)?.groupValues?.get(1)?.toIntOrNull()
+                    val sNum = Regex("(?:season|s)[^\\d]*(\\d+)", RegexOption.IGNORE_CASE)
+                        .find(url)?.groupValues?.get(1)?.toIntOrNull()
+                    if (epNum != null) {
+                        episodes.firstOrNull { ep ->
+                            ep.episode == epNum && (sNum == null || seasonNamesList.any { s -> s.season == ep.season && s.name.contains("Season $sNum", ignoreCase = true) })
+                        } ?: episodes.firstOrNull { it.episode == epNum }
+                    } else null
+                }
+
+            if (targetEp != null) {
+                focusEpisode(targetEp.season ?: 1, targetEp.episode ?: 1, responseUrl, url)
+            }
+        }
+
+        return newAnimeLoadResponse(title, responseUrl, type) {
             engName = title
             posterUrl = poster
             this.year = year
             addEpisodes(DubStatus.Subbed, episodes)
+            if (seasonNamesList.isNotEmpty()) {
+                addSeasonNames(seasonNamesList)
+            }
             showStatus = status
             plot = description
             this.tags = tags
         }
     }
 
+    private fun formatSeasonName(rawHq: String, mainTitle: String): String {
+        val trimmed = rawHq.trim()
+        if (trimmed.equals("movie", ignoreCase = true)) return "Movie"
+        if (trimmed.equals("spinoff", ignoreCase = true) || trimmed.equals("spin-off", ignoreCase = true)) return "Spin Off"
+
+        val cleanName = if (mainTitle.isNotBlank() && trimmed.startsWith(mainTitle, ignoreCase = true)) {
+            trimmed.substring(mainTitle.length).trim().removePrefix(":").removePrefix("-").trim()
+        } else {
+            trimmed
+        }
+
+        return if (cleanName.isNotBlank()) cleanName else trimmed
+    }
+
+    private fun focusEpisode(targetSeason: Int, targetEpisode: Int, vararg urls: String) {
+        try {
+            val helperClass = Class.forName("com.lagradost.cloudstream3.utils.DataStoreHelper")
+            val instance = helperClass.getDeclaredField("INSTANCE").get(null)
+            val setSeasonMethod = helperClass.methods.firstOrNull { it.name == "setResultSeason" && it.parameterTypes.size == 2 }
+            val setEpisodeMethod = helperClass.methods.firstOrNull { it.name == "setResultEpisode" && it.parameterTypes.size == 2 }
+
+            if (setSeasonMethod != null && setEpisodeMethod != null) {
+                for (u in urls) {
+                    if (u.isBlank()) continue
+                    val id = u.replace(mainUrl, "").replace("/", "").hashCode()
+                    setSeasonMethod.invoke(instance, id, targetSeason)
+                    setEpisodeMethod.invoke(instance, id, targetEpisode)
+                }
+            }
+        } catch (e: Throwable) {
+            android.util.Log.e("Anoboy", "focusEpisode error: ${e.message}")
+        }
+    }
+
     private fun parseEpisode(element: Element, seasonNum: Int = 1): Episode? {
-        val link = fixUrl(element.attr("href"))
+        val rawHref = element.attr("href")
+        if (rawHref.isBlank()) return null
+        val link = fixUrl(rawHref)
         val titleText = element.text().trim()
         if (titleText.contains("Download", ignoreCase = true)) {
             return null
@@ -226,7 +284,7 @@ class Anoboy : MainAPI() {
             titleText.contains("Part", ignoreCase = true) -> {
                 val partMatch = Regex("(Part\\s*\\d+\\s*Episode\\s*\\d+)", RegexOption.IGNORE_CASE)
                     .find(titleText)?.groupValues?.get(1)
-                partMatch ?: if (episodeNumber != null) "Part Episode $episodeNumber" else titleText
+                partMatch ?: if (episodeNumber != null) "Episode $episodeNumber" else titleText
             }
             episodeNumber != null -> "Episode $episodeNumber"
             else -> titleText
@@ -235,7 +293,7 @@ class Anoboy : MainAPI() {
         return newEpisode(link) {
             this.data = link
             this.name = nameText
-            this.episode = episodeNumber
+            this.episode = episodeNumber ?: if (titleText.contains("Movie", ignoreCase = true)) 1 else null
             this.season = seasonNum
         }
     }
