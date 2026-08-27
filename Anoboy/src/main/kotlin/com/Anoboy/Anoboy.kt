@@ -208,7 +208,7 @@ class Anoboy : MainAPI() {
                         .find(url)?.groupValues?.get(1)?.toIntOrNull()
                     if (epNum != null) {
                         episodes.firstOrNull { ep ->
-                            ep.episode == epNum && (sNum == null || seasonNamesList.any { s -> s.season == ep.season && s.name.contains("Season $sNum", ignoreCase = true) })
+                            ep.episode == epNum && (sNum == null || seasonNamesList.any { s -> s.season == ep.season && s.name?.contains("Season $sNum", ignoreCase = true) == true })
                         } ?: episodes.firstOrNull { it.episode == epNum }
                     } else null
                 }
