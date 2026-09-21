@@ -9,7 +9,7 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
 class Anoboy : MainAPI() {
-    override var mainUrl = "https://anoboy.xyz"
+    override var mainUrl = "https://anoboy.quest"
     override var name = "Anoboy"
     override val hasMainPage = true
     override var lang = "id"
