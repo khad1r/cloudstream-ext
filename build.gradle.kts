@@ -73,13 +73,14 @@ subprojects {
         }
 
         compileOptions {
-            sourceCompatibility = JavaVersion.VERSION_1_8
-            targetCompatibility = JavaVersion.VERSION_1_8
+            isCoreLibraryDesugaringEnabled = true
+            sourceCompatibility = JavaVersion.VERSION_11
+            targetCompatibility = JavaVersion.VERSION_11
         }
 
         tasks.withType<KotlinJvmCompile> {
             compilerOptions {
-                jvmTarget.set(JvmTarget.JVM_1_8) // Required
+                jvmTarget.set(JvmTarget.JVM_11) // Required
                 freeCompilerArgs.addAll(
                     "-Xno-call-assertions",
                     "-Xno-param-assertions",
@@ -92,10 +93,13 @@ subprojects {
     dependencies {
         val cloudstream by configurations
         val implementation by configurations
+        val coreLibraryDesugaring by configurations
         
         // Cloudstream dependencies
         cloudstream("com.lagradost:cloudstream3:pre-release")
         
+        coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+
         // Other dependencies
         implementation(kotlin("stdlib")) // Untuk Kotlin Standard Library
         implementation("com.github.Blatzar:NiceHttp:0.4.13") // Untuk HTTP requests
