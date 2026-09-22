@@ -7,6 +7,9 @@ concurrency:
 
 on:
   workflow_dispatch:
+  schedule:
+    # Runs everyday at 00:00 UTC (adjust time/frequency as desired)
+    - cron: '0 0 * * *'
   push:
     branches:
       # choose your default branch
